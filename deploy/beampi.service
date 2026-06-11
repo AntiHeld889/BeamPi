@@ -1,0 +1,21 @@
+[Unit]
+Description=BeamPi Beamer-Videoplayer
+After=network-online.target graphical.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/opt/beampi
+ExecStart=/usr/bin/node /opt/beampi/server.js
+Restart=always
+RestartSec=3
+Environment=NODE_ENV=production
+Environment=PORT=8080
+# Wayland-Session (Raspberry Pi OS / labwc) für das mpv-Fenster
+Environment=XDG_RUNTIME_DIR=/run/user/1000
+Environment=WAYLAND_DISPLAY=wayland-0
+Environment=DISPLAY=:0
+
+[Install]
+WantedBy=graphical.target

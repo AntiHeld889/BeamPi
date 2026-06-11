@@ -1,0 +1,1110 @@
+/* BeamPi SPA – Vanilla JS, kein Build-Schritt. */
+(() => {
+  'use strict';
+
+  // --- Mini-DOM-Helfer ------------------------------------------------------
+
+  const $ = (sel, root = document) => root.querySelector(sel);
+
+  function el(tag, props = {}, ...children) {
+    const node = document.createElement(tag);
+    for (const [key, value] of Object.entries(props)) {
+      if (key === 'class') node.className = value;
+      else if (key === 'dataset') Object.assign(node.dataset, value);
+      else if (key.startsWith('on') && typeof value === 'function') {
+        node.addEventListener(key.slice(2), value);
+      } else if (key === 'html') node.innerHTML = value;
+      else if (value !== undefined && value !== null) node.setAttribute(key, value);
+    }
+    for (const child of children.flat()) {
+      if (child === null || child === undefined || child === false) continue;
+      node.append(child.nodeType ? child : document.createTextNode(child));
+    }
+    return node;
+  }
+
+  const encodePath = (p) => p.split('/').map(encodeURIComponent).join('/');
+
+  // --- API ------------------------------------------------------------------
+
+  async function api(path, options = {}) {
+    const opts = { ...options };
+    if (opts.json !== undefined) {
+      opts.method = opts.method || 'POST';
+      opts.headers = { 'content-type': 'application/json', ...(opts.headers || {}) };
+      opts.body = JSON.stringify(opts.json);
+      delete opts.json;
+    }
+    const response = await fetch(path, opts);
+    let payload = null;
+    try {
+      payload = await response.json();
+    } catch {
+      /* keine JSON-Antwort */
+    }
+    if (!response.ok) {
+      throw new Error(payload?.message || `Fehler ${response.status}`);
+    }
+    return payload;
+  }
+
+  // --- Toasts -----------------------------------------------------------------
+
+  function toast(message, type = 'success') {
+    const node = el('div', { class: `toast toast--${type}` }, message);
+    $('#toasts').append(node);
+    setTimeout(() => {
+      node.classList.add('leaving');
+      setTimeout(() => node.remove(), 300);
+    }, 4200);
+  }
+
+  // --- Globaler Zustand ----------------------------------------------------------
+
+  const S = {
+    playlists: [],
+    settings: null,
+    status: { mode: 'idle', running: false, current_video: null, loop_video: null },
+    active: null,
+    progress: null,
+    filter: '',
+  };
+
+  function applySnapshot(snap) {
+    if (!snap) return;
+    S.status = snap.status || S.status;
+    S.active = snap.active_playlist ?? null;
+    S.progress = snap.active_progress ?? null;
+    updateLamp();
+    updateDeck();
+    if (currentRoute().view === 'dashboard') updateActiveMarkers();
+  }
+
+  async function loadState() {
+    const data = await api('/api/state');
+    S.playlists = data.playlists || [];
+    S.settings = data.settings || null;
+    applySnapshot(data);
+  }
+
+  // --- SSE Live-Status -------------------------------------------------------------
+
+  function connectEvents() {
+    const source = new EventSource('/api/events');
+    source.onmessage = (event) => {
+      try {
+        applySnapshot(JSON.parse(event.data));
+      } catch {
+        /* ignorieren */
+      }
+    };
+    source.onerror = () => {
+      // EventSource verbindet selbst neu; Lampe als "offline" markieren.
+      $('#lamp').className = 'lamp lamp--off';
+      $('#lamp-text').textContent = 'OFFLINE';
+    };
+  }
+
+  // --- Statuslampe + Deck (Live-Elemente) ---------------------------------------------
+
+  const LAMP_CONFIG = {
+    idle: { cls: 'lamp--idle', text: 'STANDBY' },
+    loop: { cls: 'lamp--loop', text: 'LOOP' },
+    trigger: { cls: 'lamp--trigger', text: 'ON AIR' },
+  };
+
+  function updateLamp() {
+    const config = LAMP_CONFIG[S.status.mode] || LAMP_CONFIG.idle;
+    $('#lamp').className = `lamp ${config.cls}`;
+    $('#lamp-text').textContent = config.text;
+    $('#footer-info').textContent = S.status.running ? 'mpv verbunden' : 'mpv getrennt';
+  }
+
+  function buildProgress() {
+    if (!S.progress) return null;
+    const { next_video_index: next, total_videos: total } = S.progress;
+    const wrap = el('div', { class: 'progress-wrap' });
+    if (total <= 24) {
+      const track = el('div', { class: 'progress-track' });
+      for (let i = 1; i <= total; i += 1) {
+        const seg = el('div', { class: 'progress-seg' });
+        if (i < next) seg.classList.add('done');
+        if (i === next) seg.classList.add('next');
+        track.append(seg);
+      }
+      wrap.append(track);
+    }
+    wrap.append(el('span', { class: 'progress-count' }, `${next} / ${total}`));
+    return wrap;
+  }
+
+  function updateDeck() {
+    const deck = $('#deck');
+    if (!deck) return;
+
+    deck.className = `card deck deck--${S.status.mode}`;
+
+    const modeNames = { idle: 'Keine Wiedergabe', loop: 'Loop läuft', trigger: 'Trigger läuft' };
+    $('#deck-mode', deck).textContent = modeNames[S.status.mode] || modeNames.idle;
+
+    const playlistNode = $('#deck-playlist', deck);
+    playlistNode.innerHTML = '';
+    playlistNode.append(
+      S.active ? S.active : el('span', { class: 'none' }, 'Keine aktive Playlist')
+    );
+
+    const currentNode = $('#deck-current', deck);
+    currentNode.textContent = S.status.current_video || '—';
+    currentNode.classList.toggle('placeholder', !S.status.current_video);
+
+    const nextNode = $('#deck-next', deck);
+    nextNode.textContent = S.progress ? S.progress.next_video : '—';
+    nextNode.classList.toggle('placeholder', !S.progress);
+
+    const loopNode = $('#deck-loop', deck);
+    loopNode.textContent = S.status.loop_video || 'kein Loop';
+    loopNode.classList.toggle('placeholder', !S.status.loop_video);
+
+    const progressSlot = $('#deck-progress', deck);
+    progressSlot.innerHTML = '';
+    const progress = buildProgress();
+    if (progress) progressSlot.append(progress);
+
+    $('#trigger-btn').disabled = !S.active;
+    updateLive();
+  }
+
+  function updateActiveMarkers() {
+    document.querySelectorAll('[data-playlist-card]').forEach((card) => {
+      const isActive = card.dataset.playlistCard === S.active;
+      card.classList.toggle('active', isActive);
+      const tag = $('.active-tag', card);
+      if (tag) tag.classList.toggle('hidden', !isActive);
+      const progressNode = $('[data-card-progress]', card);
+      if (progressNode) {
+        if (isActive && S.progress) {
+          progressNode.textContent = `Als Nächstes: ${S.progress.next_video} (${S.progress.next_video_index}/${S.progress.total_videos})`;
+        } else {
+          progressNode.textContent = '';
+        }
+      }
+    });
+  }
+
+  // --- Theme (dunkel = Standard, hell optional) -----------------------------------------
+
+  function applyTheme(theme) {
+    if (theme === 'light') {
+      document.documentElement.dataset.theme = 'light';
+      $('#theme-toggle').textContent = '☾';
+      $('#theme-toggle').title = 'Zum dunklen Modus wechseln';
+    } else {
+      delete document.documentElement.dataset.theme;
+      $('#theme-toggle').textContent = '☀';
+      $('#theme-toggle').title = 'Zum hellen Modus wechseln';
+    }
+    localStorage.setItem('beampi-theme', theme);
+  }
+
+  $('#theme-toggle').addEventListener('click', () => {
+    const isLight = document.documentElement.dataset.theme === 'light';
+    applyTheme(isLight ? 'dark' : 'light');
+  });
+
+  applyTheme(localStorage.getItem('beampi-theme') === 'light' ? 'light' : 'dark');
+
+  // --- Live-Vorschau (zeigt, was der Beamer gerade ausgibt) -----------------------------
+
+  const live = {
+    src: null,
+    timer: null,
+    open: localStorage.getItem('beampi-live-open') !== '0',
+    muted: localStorage.getItem('beampi-live-muted') !== '0',
+  };
+
+  function stopLiveTimer() {
+    clearInterval(live.timer);
+    live.timer = null;
+  }
+
+  function startLiveTimer() {
+    if (live.timer) return;
+    live.timer = setInterval(syncLivePosition, 2000);
+  }
+
+  function stopLivePlayback(video) {
+    live.src = null;
+    if (video.getAttribute('src')) {
+      video.pause();
+      video.removeAttribute('src');
+      video.load();
+    }
+    stopLiveTimer();
+  }
+
+  async function syncLivePosition() {
+    const video = $('#live-video');
+    if (!video || !live.open || !live.src) {
+      stopLiveTimer();
+      return;
+    }
+    try {
+      const data = await api('/api/player/position');
+      const info = data.playback;
+      if (!info || info.video !== live.src || info.position === null) return;
+      const target = info.position + 0.35; // kleine Latenz-Kompensation
+      if (Math.abs(video.currentTime - target) > 1.2) video.currentTime = target;
+      if (video.paused && !info.paused) video.play().catch(() => {});
+    } catch {
+      /* Netzwerkfehler ignorieren */
+    }
+  }
+
+  function updateLive() {
+    const video = $('#live-video');
+    if (!video) {
+      stopLiveTimer();
+      return;
+    }
+    $('#live-wrap').classList.toggle('hidden', !live.open);
+    $('#live-toggle').textContent = live.open ? 'Verbergen' : 'Anzeigen';
+    const muteBtn = $('#live-mute');
+    muteBtn.textContent = live.muted ? '🔇 Stumm' : '🔊 Ton an';
+    muteBtn.classList.toggle('hidden', !live.open);
+    video.muted = live.muted;
+
+    const current = S.status.current_video;
+    $('#live-badge').classList.toggle('on', Boolean(current) && live.open);
+
+    if (!live.open) {
+      stopLivePlayback(video);
+      return;
+    }
+
+    const overlay = $('#live-overlay');
+    if (!current) {
+      stopLivePlayback(video);
+      overlay.classList.remove('hidden');
+      overlay.textContent = 'Keine Wiedergabe';
+      return;
+    }
+
+    overlay.classList.add('hidden');
+    video.loop = S.status.mode === 'loop';
+    if (live.src !== current) {
+      live.src = current;
+      video.src = `/videos/${encodePath(current)}`;
+      video.play().catch(() => {});
+      syncLivePosition();
+    } else if (video.paused && !document.hidden) {
+      // z. B. nachdem der Browser das Video in einem Hintergrund-Tab pausiert hat
+      video.play().catch(() => {});
+    }
+    startLiveTimer();
+  }
+
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) {
+      updateLive();
+      syncLivePosition();
+    }
+  });
+
+  function toggleLiveOpen() {
+    live.open = !live.open;
+    localStorage.setItem('beampi-live-open', live.open ? '1' : '0');
+    updateLive();
+  }
+
+  function toggleLiveMute() {
+    live.muted = !live.muted;
+    localStorage.setItem('beampi-live-muted', live.muted ? '1' : '0');
+    updateLive();
+  }
+
+  // --- Vorschau-Modal ------------------------------------------------------------------
+
+  function openPreview(name, relPath) {
+    const modal = $('#preview-modal');
+    const video = $('#preview-video');
+    $('#preview-title').textContent = name || relPath;
+    video.src = `/videos/${encodePath(relPath)}`;
+    modal.classList.remove('hidden');
+    video.play().catch(() => {});
+  }
+
+  function closePreview() {
+    const modal = $('#preview-modal');
+    const video = $('#preview-video');
+    video.pause();
+    video.removeAttribute('src');
+    video.load();
+    modal.classList.add('hidden');
+  }
+
+  $('#preview-close').addEventListener('click', closePreview);
+  $('#preview-modal').addEventListener('click', (event) => {
+    if (event.target === $('#preview-modal')) closePreview();
+  });
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && !$('#preview-modal').classList.contains('hidden')) closePreview();
+  });
+
+  // --- Aktionen ---------------------------------------------------------------------------
+
+  async function doTrigger() {
+    try {
+      await api('/api/trigger', { method: 'POST', json: {} });
+      toast('Nächstes Video gestartet.');
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  }
+
+  async function doStart(name) {
+    try {
+      const result = await api(`/api/playlists/${encodeURIComponent(name)}/start`, { method: 'POST' });
+      toast(`Playlist „${name}" gestartet.`);
+      if (result?.warning) toast(result.warning, 'error');
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  }
+
+  async function doDelete(name) {
+    if (!window.confirm(`Playlist „${name}" wirklich löschen?`)) return;
+    try {
+      await api(`/api/playlists/${encodeURIComponent(name)}`, { method: 'DELETE' });
+      toast(`Playlist „${name}" wurde gelöscht.`);
+      await loadState();
+      render();
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  }
+
+  async function doDuplicate(name) {
+    try {
+      const result = await api(`/api/playlists/${encodeURIComponent(name)}/duplicate`, { method: 'POST', json: {} });
+      toast(`Playlist „${result.playlist.name}" wurde erstellt.`);
+      await loadState();
+      location.hash = `#/playlist/edit/${encodeURIComponent(result.playlist.name)}`;
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  }
+
+  // --- View: Dashboard -----------------------------------------------------------------------
+
+  function viewDashboard(root) {
+    root.append(
+      el('div', { class: 'page-head' },
+        el('div', {},
+          el('span', { class: 'kicker' }, 'Projektionssteuerung'),
+          el('h1', {}, 'Dashboard')
+        ),
+        el('a', { class: 'btn btn--primary', href: '#/playlist/new' }, '+ Neue Playlist')
+      )
+    );
+
+    // Deck / Hero
+    const deck = el('section', { class: 'card deck', id: 'deck' },
+      el('div', { class: 'deck-info' },
+        el('span', { class: 'deck-label', id: 'deck-mode' }, 'Keine Wiedergabe'),
+        el('div', { class: 'deck-playlist', id: 'deck-playlist' }),
+        el('div', { class: 'deck-rows' },
+          el('div', { class: 'deck-row' }, el('b', {}, 'Läuft gerade'), el('span', { class: 'mono', id: 'deck-current' })),
+          el('div', { class: 'deck-row' }, el('b', {}, 'Als Nächstes'), el('span', { class: 'mono', id: 'deck-next' })),
+          el('div', { class: 'deck-row' }, el('b', {}, 'Loop-Video'), el('span', { class: 'mono', id: 'deck-loop' }))
+        ),
+        el('div', { id: 'deck-progress' })
+      ),
+      el('div', { class: 'trigger-zone' },
+        el('button', { class: 'trigger-btn', id: 'trigger-btn', onclick: doTrigger, disabled: 'disabled' }, 'TRIGGER'),
+        el('span', { class: 'trigger-hint' }, 'Nächstes Video abspielen')
+      )
+    );
+    root.append(deck);
+
+    // Live-Vorschau
+    const liveVideo = el('video', { id: 'live-video', playsinline: 'playsinline', preload: 'auto' });
+    liveVideo.muted = live.muted;
+    liveVideo.addEventListener('error', () => {
+      if (!live.src) return;
+      const overlay = $('#live-overlay');
+      if (overlay) {
+        overlay.classList.remove('hidden');
+        overlay.textContent = 'Dieses Format kann der Browser nicht abspielen.';
+      }
+    });
+
+    root.append(
+      el('section', { class: 'card live-card' },
+        el('div', { class: 'panel-head' },
+          el('h3', {}, 'Live-Vorschau', el('span', { class: 'sub' }, 'Zeigt, was der Beamer gerade ausgibt')),
+          el('div', { class: 'live-controls' },
+            el('span', { class: 'live-badge', id: 'live-badge' }, el('span', { class: 'live-dot' }), 'LIVE'),
+            el('button', { class: 'btn btn--ghost btn--sm', id: 'live-mute', onclick: toggleLiveMute }, ''),
+            el('button', { class: 'btn btn--sm', id: 'live-toggle', onclick: toggleLiveOpen }, '')
+          )
+        ),
+        el('div', { class: 'live-wrap', id: 'live-wrap' },
+          liveVideo,
+          el('div', { class: 'live-overlay', id: 'live-overlay' }, 'Keine Wiedergabe')
+        )
+      )
+    );
+
+    // Toolbar + Playlist-Karten
+    const search = el('input', {
+      class: 'input',
+      type: 'search',
+      placeholder: 'Playlists durchsuchen…',
+      value: S.filter,
+      oninput: (event) => {
+        S.filter = event.target.value;
+        renderPlaylistGrid();
+      },
+    });
+
+    root.append(
+      el('div', { class: 'toolbar' },
+        el('h2', { style: 'font-size:20px' }, 'Playlists'),
+        el('span', { class: 'count-badge', id: 'pl-count' }, ''),
+        el('div', { class: 'spacer' }),
+        el('div', { class: 'search-wrap' }, search)
+      )
+    );
+
+    const grid = el('div', { class: 'playlist-grid', id: 'pl-grid' });
+    root.append(grid);
+
+    function renderPlaylistGrid() {
+      const query = S.filter.trim().toLowerCase();
+      const visible = S.playlists.filter((p) => !query || p.name.toLowerCase().includes(query));
+      $('#pl-count').textContent = `${visible.length} von ${S.playlists.length}`;
+      grid.innerHTML = '';
+      if (S.playlists.length === 0) {
+        grid.append(el('div', { class: 'card empty-state', style: 'grid-column:1/-1' },
+          'Noch keine Playlists. Lege mit „Neue Playlist" die erste an.'));
+        return;
+      }
+      if (visible.length === 0) {
+        grid.append(el('div', { class: 'card empty-state', style: 'grid-column:1/-1' },
+          'Keine Playlists entsprechen deiner Suche.'));
+        return;
+      }
+      for (const playlist of visible) {
+        const count = playlist.videos.length;
+        grid.append(
+          el('div', { class: 'card pl-card', dataset: { playlistCard: playlist.name } },
+            el('span', { class: 'active-tag hidden' }, 'AKTIV'),
+            el('div', { class: 'pl-name' }, playlist.name),
+            el('div', { class: 'pl-meta' },
+              el('span', { class: 'chip chip--amber' }, `${count} ${count === 1 ? 'Video' : 'Videos'}`),
+              playlist.loop_video
+                ? el('span', { class: 'chip chip--loop', title: playlist.loop_video }, `Loop · ${playlist.loop_video}`)
+                : el('span', { class: 'chip' }, 'kein Loop')
+            ),
+            el('div', { class: 'pl-progress', dataset: { cardProgress: '1' } }),
+            el('div', { class: 'pl-actions' },
+              el('button', { class: 'btn btn--primary btn--sm', onclick: () => doStart(playlist.name) }, '▶ Starten'),
+              el('a', { class: 'btn btn--sm', href: `#/playlist/edit/${encodeURIComponent(playlist.name)}` }, 'Bearbeiten'),
+              el('button', { class: 'btn btn--ghost btn--sm', onclick: () => doDuplicate(playlist.name) }, 'Duplizieren'),
+              el('button', { class: 'btn btn--danger btn--ghost btn--sm', onclick: () => doDelete(playlist.name) }, 'Löschen')
+            )
+          )
+        );
+      }
+      updateActiveMarkers();
+    }
+
+    renderPlaylistGrid();
+    updateLamp();
+    updateDeck();
+  }
+
+  // --- View: Playlist-Editor ---------------------------------------------------------------------
+
+  async function viewEditor(root, editName) {
+    const isEdit = Boolean(editName);
+    const playlist = isEdit ? S.playlists.find((p) => p.name === editName) : null;
+    if (isEdit && !playlist) {
+      toast('Playlist wurde nicht gefunden.', 'error');
+      location.hash = '#/';
+      return;
+    }
+
+    let videoData;
+    try {
+      videoData = await api('/api/videos');
+    } catch (err) {
+      toast(err.message, 'error');
+      videoData = { videos: [], tree: [] };
+    }
+
+    const known = new Set(videoData.videos);
+    // Auswahl: bestehende Reihenfolge übernehmen (auch fehlende Dateien anzeigen)
+    let selected = playlist ? [...playlist.videos] : [];
+
+    root.append(
+      el('div', { class: 'page-head' },
+        el('div', {},
+          el('span', { class: 'kicker' }, isEdit ? 'Playlist bearbeiten' : 'Neue Playlist'),
+          el('h1', {}, isEdit ? playlist.name : 'Neue Playlist')
+        ),
+        el('a', { class: 'btn btn--ghost', href: '#/' }, '← Zurück')
+      )
+    );
+
+    // Stammdaten
+    const nameInput = el('input', {
+      class: 'input', id: 'pl-name', type: 'text',
+      value: isEdit ? playlist.name : '',
+      placeholder: 'z. B. Halloween Show',
+      ...(isEdit ? { readonly: 'readonly' } : {}),
+    });
+
+    const loopSelect = el('select', { class: 'input mono', id: 'pl-loop' },
+      el('option', { value: '' }, '(kein Loop-Video)'),
+      videoData.videos.map((v) =>
+        el('option', { value: v, ...(playlist?.loop_video === v ? { selected: 'selected' } : {}) }, v)
+      )
+    );
+    // Falls das gespeicherte Loop-Video nicht mehr existiert, trotzdem anzeigen
+    if (playlist?.loop_video && !known.has(playlist.loop_video)) {
+      loopSelect.append(el('option', { value: playlist.loop_video, selected: 'selected' }, `${playlist.loop_video} (fehlt)`));
+    }
+
+    root.append(
+      el('section', { class: 'card card-pad', style: 'margin-bottom:18px' },
+        el('div', { class: 'settings-grid' },
+          el('div', { class: 'field', style: 'margin:0' },
+            el('label', { for: 'pl-name' }, 'Name'),
+            nameInput,
+            isEdit ? el('div', { class: 'hint' }, 'Der Name kann nachträglich nicht geändert werden.') : null
+          ),
+          el('div', { class: 'field', style: 'margin:0' },
+            el('label', { for: 'pl-loop' }, 'Loop-Video'),
+            loopSelect,
+            el('div', { class: 'hint' }, 'Läuft in Dauerschleife, bis ein Trigger ausgelöst wird.')
+          )
+        )
+      )
+    );
+
+    // Editor: Auswahl + Bibliothek
+    const selList = el('ul', { class: 'sel-list' });
+    const selCount = el('span', { class: 'count-badge' }, '0 Videos');
+
+    const selPanel = el('section', { class: 'card' },
+      el('div', { class: 'panel-head' },
+        el('h3', {}, 'Playlist-Reihenfolge', el('span', { class: 'sub' }, 'Ziehen zum Sortieren')),
+        selCount
+      ),
+      el('div', { class: 'panel-body' }, selList)
+    );
+
+    const treeContainer = el('div', {});
+    const searchInput = el('input', {
+      class: 'input', type: 'search', placeholder: 'Videos durchsuchen…',
+      oninput: () => renderTree(),
+    });
+
+    const libPanel = el('section', { class: 'card' },
+      el('div', { class: 'panel-head' },
+        el('h3', {}, 'Video-Bibliothek', el('span', { class: 'sub' }, `${videoData.videos.length} Videos gefunden`)),
+        el('div', { style: 'display:flex;gap:8px' },
+          el('button', { class: 'btn btn--ghost btn--sm', onclick: () => toggleAllFolders(true) }, 'Alle öffnen'),
+          el('button', { class: 'btn btn--ghost btn--sm', onclick: () => toggleAllFolders(false) }, 'Alle schließen')
+        )
+      ),
+      el('div', { class: 'panel-body' },
+        el('div', { class: 'search-wrap', style: 'max-width:none;margin-bottom:12px' }, searchInput),
+        treeContainer
+      )
+    );
+
+    root.append(el('div', { class: 'editor-grid' }, selPanel, libPanel));
+
+    // Speichern-Leiste
+    root.append(
+      el('div', { style: 'display:flex;gap:10px;margin-top:22px' },
+        el('button', { class: 'btn btn--primary', onclick: save }, isEdit ? 'Änderungen speichern' : 'Playlist speichern'),
+        el('a', { class: 'btn btn--ghost', href: '#/' }, 'Abbrechen')
+      )
+    );
+
+    // -- Auswahl-Liste ----------------------------------------------------
+
+    let dragIndex = null;
+
+    function renderSelected() {
+      selList.innerHTML = '';
+      selCount.textContent = `${selected.length} ${selected.length === 1 ? 'Video' : 'Videos'}`;
+      if (selected.length === 0) {
+        selList.append(el('li', { class: 'sel-empty' }, 'Noch keine Videos ausgewählt – füge sie aus der Bibliothek hinzu.'));
+        renderTreeMarkers();
+        return;
+      }
+      selected.forEach((videoPath, index) => {
+        const name = videoPath.split('/').pop();
+        const item = el('li', { class: 'sel-item', draggable: 'true' },
+          el('span', { class: 'grip', title: 'Ziehen zum Sortieren' }, '⠿'),
+          el('span', { class: 'idx' }, String(index + 1)),
+          el('span', { class: 'sel-name', title: videoPath }, known.has(videoPath) ? videoPath : `${videoPath} (fehlt)`),
+          el('span', { class: 'sel-actions' },
+            el('button', { class: 'icon-btn', title: 'Nach oben', disabled: index === 0 ? 'disabled' : undefined, onclick: () => move(index, -1) }, '↑'),
+            el('button', { class: 'icon-btn', title: 'Nach unten', disabled: index === selected.length - 1 ? 'disabled' : undefined, onclick: () => move(index, 1) }, '↓'),
+            known.has(videoPath)
+              ? el('button', { class: 'icon-btn', title: 'Vorschau', onclick: () => openPreview(name, videoPath) }, '▶')
+              : null,
+            el('button', { class: 'icon-btn icon-btn--danger', title: 'Entfernen', onclick: () => removeVideo(videoPath) }, '✕')
+          )
+        );
+        item.addEventListener('dragstart', () => {
+          dragIndex = index;
+          item.classList.add('dragging');
+        });
+        item.addEventListener('dragend', () => {
+          dragIndex = null;
+          item.classList.remove('dragging');
+          selList.querySelectorAll('.drag-over').forEach((n) => n.classList.remove('drag-over'));
+        });
+        item.addEventListener('dragover', (event) => {
+          event.preventDefault();
+          if (dragIndex !== null && dragIndex !== index) item.classList.add('drag-over');
+        });
+        item.addEventListener('dragleave', () => item.classList.remove('drag-over'));
+        item.addEventListener('drop', (event) => {
+          event.preventDefault();
+          if (dragIndex === null || dragIndex === index) return;
+          const [moved] = selected.splice(dragIndex, 1);
+          selected.splice(index, 0, moved);
+          renderSelected();
+        });
+        selList.append(item);
+      });
+      renderTreeMarkers();
+    }
+
+    function move(index, delta) {
+      const target = index + delta;
+      if (target < 0 || target >= selected.length) return;
+      [selected[index], selected[target]] = [selected[target], selected[index]];
+      renderSelected();
+    }
+
+    function addVideo(videoPath) {
+      if (selected.includes(videoPath)) {
+        toast('Video ist bereits in der Playlist.', 'info');
+        return;
+      }
+      selected.push(videoPath);
+      renderSelected();
+    }
+
+    function removeVideo(videoPath) {
+      selected = selected.filter((p) => p !== videoPath);
+      renderSelected();
+    }
+
+    // -- Bibliotheks-Baum ----------------------------------------------------
+
+    const openFolders = new Set();
+
+    function buildFileNode(node) {
+      const inPlaylist = selected.includes(node.path);
+      return el('li', { class: `tree-file${inPlaylist ? ' in-playlist' : ''}`, dataset: { filePath: node.path } },
+        el('span', { class: 'file-name', title: node.path }, node.name),
+        el('span', { class: 'file-actions' },
+          el('button', { class: 'icon-btn', title: 'Vorschau', onclick: () => openPreview(node.name, node.path) }, '▶'),
+          inPlaylist
+            ? el('button', { class: 'icon-btn icon-btn--danger', title: 'Entfernen', onclick: () => removeVideo(node.path) }, '✕')
+            : el('button', { class: 'icon-btn', title: 'Zur Playlist hinzufügen', onclick: () => addVideo(node.path) }, '+')
+        )
+      );
+    }
+
+    function buildTreeNodes(nodes) {
+      const list = el('ul', { class: 'tree' });
+      for (const node of nodes) {
+        if (node.is_file) {
+          list.append(buildFileNode(node));
+        } else {
+          const folder = el('li', { class: `tree-folder${openFolders.has(node.path) ? ' open' : ''}`, dataset: { folderPath: node.path } },
+            el('div', {
+              class: 'folder-row',
+              onclick: (event) => {
+                const li = event.currentTarget.parentElement;
+                li.classList.toggle('open');
+                if (li.classList.contains('open')) openFolders.add(node.path);
+                else openFolders.delete(node.path);
+              },
+            }, el('span', { class: 'caret' }, '▶'), `${node.name}/`),
+            node.children.length
+              ? buildTreeNodes(node.children)
+              : el('ul', {}, el('li', { class: 'tree-empty' }, 'Keine Videos in diesem Ordner.'))
+          );
+          list.append(folder);
+        }
+      }
+      return list;
+    }
+
+    function renderTree() {
+      treeContainer.innerHTML = '';
+      const query = searchInput.value.trim().toLowerCase();
+      if (videoData.videos.length === 0) {
+        treeContainer.append(el('p', { class: 'tree-empty' },
+          'Keine Videos gefunden. Lade unter Einstellungen Videos hoch.'));
+        return;
+      }
+      if (!query) {
+        treeContainer.append(buildTreeNodes(videoData.tree));
+        return;
+      }
+      const matches = videoData.videos.filter((v) => v.toLowerCase().includes(query));
+      if (matches.length === 0) {
+        treeContainer.append(el('p', { class: 'tree-empty' }, 'Keine Videos gefunden, die den Suchbegriff enthalten.'));
+        return;
+      }
+      const list = el('ul', { class: 'tree' });
+      for (const videoPath of matches) {
+        list.append(buildFileNode({ name: videoPath, path: videoPath }));
+      }
+      treeContainer.append(list);
+    }
+
+    function renderTreeMarkers() {
+      // Nach Auswahländerung Baum-Buttons aktualisieren
+      renderTree();
+    }
+
+    function toggleAllFolders(open) {
+      treeContainer.querySelectorAll('.tree-folder').forEach((li) => {
+        li.classList.toggle('open', open);
+        if (open) openFolders.add(li.dataset.folderPath);
+        else openFolders.delete(li.dataset.folderPath);
+      });
+    }
+
+    // -- Speichern -------------------------------------------------------------
+
+    async function save() {
+      const name = nameInput.value.trim();
+      const loopVideo = loopSelect.value || null;
+      if (!name) {
+        toast('Bitte einen Namen für die Playlist eingeben.', 'error');
+        nameInput.focus();
+        return;
+      }
+      try {
+        if (isEdit) {
+          const result = await api(`/api/playlists/${encodeURIComponent(editName)}`, {
+            method: 'PUT',
+            json: { loop_video: loopVideo, videos: selected },
+          });
+          if (result?.warning) toast(result.warning, 'error');
+          toast('Playlist aktualisiert.');
+        } else {
+          await api('/api/playlists', { json: { name, loop_video: loopVideo, videos: selected } });
+          toast('Playlist gespeichert.');
+        }
+        await loadState();
+        location.hash = '#/';
+      } catch (err) {
+        toast(err.message, 'error');
+      }
+    }
+
+    renderSelected();
+  }
+
+  // --- View: Einstellungen --------------------------------------------------------------------------
+
+  async function viewSettings(root) {
+    let data;
+    try {
+      data = await api('/api/settings');
+    } catch (err) {
+      toast(err.message, 'error');
+      return;
+    }
+    const settings = data.settings;
+
+    root.append(
+      el('div', { class: 'page-head' },
+        el('div', {},
+          el('span', { class: 'kicker' }, 'Konfiguration'),
+          el('h1', {}, 'Einstellungen')
+        ),
+        el('a', { class: 'btn btn--ghost', href: '#/' }, '← Zurück')
+      )
+    );
+
+    const audioInput = el('input', { class: 'input mono', type: 'text', value: settings.audio_output, placeholder: 'z. B. alsa/plughw:0,0 – leer = auto' });
+    const startHook = el('input', { class: 'input mono', type: 'url', value: settings.trigger_start_webhook_url, placeholder: 'https://example.com/webhook/start' });
+    const endHook = el('input', { class: 'input mono', type: 'url', value: settings.trigger_end_webhook_url, placeholder: 'https://example.com/webhook/end' });
+    const dirInput = el('input', { class: 'input mono', type: 'text', value: settings.video_directory });
+    const autoSelect = el('select', { class: 'input' },
+      el('option', { value: '' }, 'Keine automatische Wiedergabe'),
+      S.playlists.map((p) =>
+        el('option', { value: p.name, ...(settings.auto_start_playlist === p.name ? { selected: 'selected' } : {}) }, p.name)
+      )
+    );
+    const gpioPinInput = el('input', {
+      class: 'input mono', type: 'number', min: '0', max: '27', step: '1',
+      value: settings.gpio_pin, placeholder: 'z. B. 17 – leer = deaktiviert',
+    });
+    const gpioDebounceInput = el('input', {
+      class: 'input mono', type: 'number', min: '50', max: '5000', step: '10',
+      value: settings.gpio_debounce_ms,
+    });
+    const gpioStatusChip = el('span', { class: 'chip' }, '');
+
+    function renderGpioStatus(gpioStatus) {
+      gpioStatusChip.classList.remove('chip--loop', 'chip--amber');
+      if (!gpioStatus || gpioStatus.pin === null) {
+        gpioStatusChip.textContent = 'Taster deaktiviert';
+      } else if (gpioStatus.error) {
+        gpioStatusChip.textContent = `Fehler: ${gpioStatus.error}`;
+      } else if (gpioStatus.running) {
+        gpioStatusChip.classList.add('chip--loop');
+        gpioStatusChip.textContent = `Taster aktiv an GPIO${gpioStatus.pin}`;
+      } else {
+        gpioStatusChip.classList.add('chip--amber');
+        gpioStatusChip.textContent = `GPIO${gpioStatus.pin} wird gestartet …`;
+      }
+    }
+    renderGpioStatus(data.gpio);
+
+    async function saveSettings() {
+      try {
+        const result = await api('/api/settings', {
+          method: 'PUT',
+          json: {
+            audio_output: audioInput.value,
+            trigger_start_webhook_url: startHook.value,
+            trigger_end_webhook_url: endHook.value,
+            video_directory: dirInput.value,
+            auto_start_playlist: autoSelect.value,
+            gpio_pin: gpioPinInput.value,
+            gpio_debounce_ms: gpioDebounceInput.value || '250',
+          },
+        });
+        toast('Einstellungen gespeichert.');
+        for (const warning of result?.warnings ?? []) toast(warning, 'info');
+        renderGpioStatus(result?.gpio);
+        // Kurz darauf nochmal prüfen, ob die Taster-Überwachung läuft
+        if (result?.gpio?.pin !== null) {
+          setTimeout(async () => {
+            try {
+              renderGpioStatus((await api('/api/settings')).gpio);
+            } catch { /* egal */ }
+          }, 1200);
+        }
+        // Auto-Start-Playlist sofort aktivieren (Verhalten wie im Original)
+        if (autoSelect.value) await doStart(autoSelect.value);
+        await loadState();
+      } catch (err) {
+        toast(err.message, 'error');
+      }
+    }
+
+    root.append(
+      el('section', { class: 'card card-pad', style: 'margin-bottom:18px' },
+        el('h3', { style: 'margin-bottom:16px' }, 'Wiedergabe & Integration'),
+        el('div', { class: 'settings-grid' },
+          el('div', {},
+            el('div', { class: 'field' },
+              el('label', {}, 'Audioausgabe (mpv Audio-Device)'),
+              audioInput,
+              el('div', { class: 'hint' }, '„auto" oder leer lassen für automatische Auswahl durch mpv.')
+            ),
+            el('div', { class: 'field' },
+              el('label', {}, 'Videoverzeichnis'),
+              dirInput,
+              el('div', { class: 'hint' }, 'Wird automatisch erstellt, falls es noch nicht existiert.')
+            ),
+            el('div', { class: 'field', style: 'margin-bottom:0' },
+              el('label', {}, 'Automatisch startende Playlist'),
+              autoSelect,
+              el('div', { class: 'hint' }, 'Wird beim Start von BeamPi automatisch aktiviert.')
+            )
+          ),
+          el('div', {},
+            el('div', { class: 'field' },
+              el('label', {}, 'Webhook bei Trigger-Start'),
+              startHook,
+              el('div', { class: 'hint' }, 'Wird aufgerufen, wenn ein Trigger-Video startet (POST, JSON).')
+            ),
+            el('div', { class: 'field', style: 'margin-bottom:0' },
+              el('label', {}, 'Webhook bei Trigger-Ende'),
+              endHook,
+              el('div', { class: 'hint' }, 'Wird aufgerufen, wenn ein Trigger-Video zu Ende ist.')
+            )
+          ),
+          el('div', {},
+            el('div', { class: 'field' },
+              el('label', {}, 'GPIO-Taster (BCM-Pin)'),
+              gpioPinInput,
+              el('div', { class: 'hint' },
+                'Taster zwischen GPIO-Pin und GND anschließen – der interne Pull-up wird automatisch gesetzt. Beispiel: GPIO17 = Header-Pin 11, GND = Header-Pin 9. Ein Druck wirkt wie der Trigger-Button.')
+            ),
+            el('div', { class: 'field' },
+              el('label', {}, 'Entprellzeit (ms)'),
+              gpioDebounceInput,
+              el('div', { class: 'hint' }, 'Mindestabstand zwischen zwei Tastendrücken (50–5000 ms).')
+            ),
+            el('div', { class: 'field', style: 'margin-bottom:0' },
+              el('label', {}, 'Taster-Status'),
+              gpioStatusChip
+            )
+          )
+        ),
+        el('div', { style: 'margin-top:20px' },
+          el('button', { class: 'btn btn--primary', onclick: saveSettings }, 'Einstellungen speichern')
+        )
+      )
+    );
+
+    // Ordner + Upload
+    const folderInput = el('input', { class: 'input mono', type: 'text', placeholder: 'z. B. veranstaltungen/2026' });
+    const subdirInput = el('input', { class: 'input mono', type: 'text', placeholder: 'leer = Hauptverzeichnis' });
+    const fileInput = el('input', { class: 'input', type: 'file', accept: 'video/*,.mkv,.avi,.wmv,.m4v,.mpg,.mpeg', multiple: 'multiple' });
+    const progressBar = el('div', { class: 'bar' });
+    const progressWrap = el('div', { class: 'upload-progress hidden' }, progressBar);
+    const uploadBtn = el('button', { class: 'btn btn--primary', onclick: doUpload }, 'Videos hochladen');
+
+    async function createFolder() {
+      const value = folderInput.value.trim();
+      if (!value) {
+        toast('Bitte einen Ordnernamen angeben.', 'error');
+        return;
+      }
+      try {
+        await api('/api/folders', { json: { path: value } });
+        toast('Ordner wurde erstellt.');
+        folderInput.value = '';
+      } catch (err) {
+        toast(err.message, 'error');
+      }
+    }
+
+    function doUpload() {
+      const files = fileInput.files;
+      if (!files || files.length === 0) {
+        toast('Bitte zuerst Videodateien auswählen.', 'error');
+        return;
+      }
+      const formData = new FormData();
+      formData.append('subdirectory', subdirInput.value.trim());
+      for (const file of files) formData.append('video_files', file);
+
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', '/api/upload');
+      progressWrap.classList.remove('hidden');
+      progressBar.style.width = '0%';
+      uploadBtn.disabled = true;
+
+      xhr.upload.onprogress = (event) => {
+        if (event.lengthComputable) {
+          progressBar.style.width = `${Math.round((event.loaded / event.total) * 100)}%`;
+        }
+      };
+      xhr.onload = () => {
+        uploadBtn.disabled = false;
+        progressWrap.classList.add('hidden');
+        let payload = null;
+        try {
+          payload = JSON.parse(xhr.responseText);
+        } catch { /* leer */ }
+        if (xhr.status >= 200 && xhr.status < 300) {
+          toast(`${payload?.saved?.length ?? 0} Datei(en) hochgeladen.`);
+          fileInput.value = '';
+        } else {
+          toast(payload?.message || `Upload fehlgeschlagen (${xhr.status})`, 'error');
+        }
+      };
+      xhr.onerror = () => {
+        uploadBtn.disabled = false;
+        progressWrap.classList.add('hidden');
+        toast('Upload fehlgeschlagen – Netzwerkfehler.', 'error');
+      };
+      xhr.send(formData);
+    }
+
+    root.append(
+      el('div', { class: 'settings-grid' },
+        el('section', { class: 'card card-pad' },
+          el('h3', { style: 'margin-bottom:6px' }, 'Neuen Ordner anlegen'),
+          el('p', { class: 'hint', style: 'margin:0 0 14px;color:var(--text-faint);font-size:13px' },
+            `Unterordner innerhalb von ${data.video_directory}`),
+          el('div', { class: 'field' },
+            el('label', {}, 'Ordnerpfad (relativ)'),
+            folderInput
+          ),
+          el('button', { class: 'btn', onclick: createFolder }, 'Ordner erstellen')
+        ),
+        el('section', { class: 'card card-pad' },
+          el('h3', { style: 'margin-bottom:6px' }, 'Videos hochladen'),
+          el('p', { class: 'hint', style: 'margin:0 0 14px;color:var(--text-faint);font-size:13px' },
+            'Mehrere Dateien möglich. Erlaubt: mp4, mkv, mov, avi, mpg, webm, m4v, wmv'),
+          el('div', { class: 'field' },
+            el('label', {}, 'Zielordner (relativ, optional)'),
+            subdirInput
+          ),
+          el('div', { class: 'field' },
+            el('label', {}, 'Videodateien'),
+            fileInput
+          ),
+          uploadBtn,
+          progressWrap
+        )
+      )
+    );
+  }
+
+  // --- Router -----------------------------------------------------------------------------------
+
+  function currentRoute() {
+    const hash = location.hash.replace(/^#\/?/, '');
+    if (hash === 'settings') return { view: 'settings' };
+    if (hash === 'playlist/new') return { view: 'editor' };
+    const editMatch = hash.match(/^playlist\/edit\/(.+)$/);
+    if (editMatch) return { view: 'editor', name: decodeURIComponent(editMatch[1]) };
+    return { view: 'dashboard' };
+  }
+
+  async function render() {
+    const route = currentRoute();
+    const root = $('#app');
+    root.innerHTML = '';
+    root.style.animation = 'none';
+    void root.offsetHeight; // Animation neu starten
+    root.style.animation = '';
+
+    document.querySelectorAll('[data-nav]').forEach((link) => {
+      link.classList.toggle('active', link.dataset.nav === (route.view === 'settings' ? 'settings' : 'dashboard'));
+    });
+
+    if (route.view === 'settings') await viewSettings(root);
+    else if (route.view === 'editor') await viewEditor(root, route.name);
+    else viewDashboard(root);
+  }
+
+  window.addEventListener('hashchange', render);
+
+  // --- Start ------------------------------------------------------------------------------------
+
+  (async () => {
+    try {
+      await loadState();
+    } catch (err) {
+      toast(`Server nicht erreichbar: ${err.message}`, 'error');
+    }
+    connectEvents();
+    render();
+  })();
+})();
