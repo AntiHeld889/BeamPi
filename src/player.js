@@ -217,6 +217,11 @@ export class Player extends EventEmitter {
       `--input-ipc-server=${SOCKET_PATH}`,
       '--really-quiet',
       '--no-terminal',
+      // Hardware-Dekodierung (Pi: h264/hevc über V4L2-M2M bzw. rpivid)
+      '--hwdec=auto-safe',
+      // Günstige Skalierer – wichtig, wenn auf 4K hochskaliert wird (Pi-4-GPU)
+      '--profile=fast',
+      '--framedrop=vo',
     ];
     const audioDevice = (this.getAudioDevice() || '').trim();
     if (audioDevice && audioDevice !== 'auto') {
