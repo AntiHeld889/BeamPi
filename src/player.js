@@ -240,16 +240,29 @@ export class Player extends EventEmitter {
     const drmMode = this.getDrmMode();
     if (drmMode) args.push(`--drm-mode=${drmMode}`);
 
-    // Läuft kein Compositor (Wayland-Socket fehlt) und kein X (kein DISPLAY),
-    // den DRM-Kontext erzwingen. Ohne das fällt mpv auf vo=sdl zurück und
-    // rendert UNSICHTBAR ins Leere, während der Status "spielt" meldet.
+    // Display-Umgebung bei jedem mpv-Start neu erkennen:
+    //  1. Wayland-Socket vorhanden → Wayland-Fenster (labwc/wayfire)
+    //  2. X11-Socket vorhanden → X11-Fenster (DISPLAY=:0 setzen)
+    //  3. sonst → DRM/KMS direkt erzwingen. Ohne das fällt mpv auf vo=sdl
+    //     zurück und rendert UNSICHTBAR, während der Status "spielt" meldet.
+    // Achtung: DISPLAY blind zu setzen, ohne dass X läuft, schickt mpv in
+    // einen kaputten Fallback-Pfad mit massiven Frame-Drops.
     const waylandSocket = env.WAYLAND_DISPLAY
       ? env.WAYLAND_DISPLAY.startsWith('/')
         ? env.WAYLAND_DISPLAY
         : path.join(env.XDG_RUNTIME_DIR ?? '', env.WAYLAND_DISPLAY)
       : null;
     const haveWayland = waylandSocket ? fs.existsSync(waylandSocket) : false;
-    if (!haveWayland && !env.DISPLAY) {
+    let haveX11 = Boolean(env.DISPLAY);
+    if (!haveWayland && !haveX11 && fs.existsSync('/tmp/.X11-unix/X0')) {
+      env.DISPLAY = ':0';
+      haveX11 = true;
+    }
+    if (haveX11 && !env.XAUTHORITY) {
+      const xauthority = path.join(os.homedir(), '.Xauthority');
+      if (fs.existsSync(xauthority)) env.XAUTHORITY = xauthority;
+    }
+    if (!haveWayland && !haveX11) {
       args.push('--vo=gpu', '--gpu-context=drm');
     }
 
