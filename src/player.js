@@ -236,8 +236,11 @@ export class Player extends EventEmitter {
     const drmMode = this.getDrmMode();
     if (drmMode) args.push(`--drm-mode=${drmMode}`);
 
+    // Wichtig: DISPLAY hier NICHT künstlich setzen. Ein gesetztes DISPLAY ohne
+    // laufenden X-Server schickt mpv in einen fehlerhaften Fallback-Pfad mit
+    // massiven Frame-Drops (~14/s auf dem Pi 4). Ohne Display-Variablen nutzt
+    // mpv DRM/KMS direkt – der schnellste Weg für eine dedizierte Player-Box.
     const env = { ...process.env };
-    env.DISPLAY ??= ':0';
 
     let proc;
     try {

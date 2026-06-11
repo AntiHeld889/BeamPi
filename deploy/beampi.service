@@ -12,10 +12,12 @@ Restart=always
 RestartSec=3
 Environment=NODE_ENV=production
 Environment=PORT=8080
-# Wayland-Session (Raspberry Pi OS / labwc) für das mpv-Fenster
+# Wayland-Session (Raspberry Pi OS / labwc) für das mpv-Fenster.
+# Läuft kein Compositor, gibt mpv direkt über DRM/KMS aus (schnellster Pfad).
+# Achtung: DISPLAY=:0 hier NICHT setzen – ohne laufenden X-Server verursacht
+# das massive Frame-Drops. Nur bei einem echten X11-Setup ergänzen.
 Environment=XDG_RUNTIME_DIR=/run/user/1000
 Environment=WAYLAND_DISPLAY=wayland-0
-Environment=DISPLAY=:0
 
 [Install]
 WantedBy=graphical.target
