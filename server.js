@@ -198,6 +198,7 @@ function duplicatePlaylist(name, requestedName) {
   if (requestedName != null && requestedName !== '') {
     candidate = String(requestedName).trim();
     if (!candidate) throw new Error('Der neue Playlist-Name darf nicht leer sein.');
+    if (candidate.includes('/')) throw new Error('Der Name darf keinen Schrägstrich enthalten.');
     if (playlists.has(candidate)) throw new Error('Eine Playlist mit diesem Namen existiert bereits.');
   } else {
     const base = `${original.name} Kopie`;
@@ -260,7 +261,8 @@ player.on('status', (status) => {
 
 const app = express();
 app.disable('x-powered-by');
-app.use(express.json());
+// 2 MB statt der 100-kB-Voreinstellung – Playlists mit sehr vielen Videos
+app.use(express.json({ limit: '2mb' }));
 app.use(express.urlencoded({ extended: false }));
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -586,14 +588,14 @@ const upload = multer({
       }
     },
     filename: (req, file, cb) => {
-      const name = sanitizeFilename(file.originalname);
-      if (!name || !isVideoFile(name)) {
-        cb(new Error(`Ungültige Videodatei: ${file.originalname}`));
-        return;
-      }
-      cb(null, name);
+      cb(null, sanitizeFilename(file.originalname));
     },
   }),
+  // Ungültige Dateien überspringen statt den ganzen Upload abzubrechen
+  fileFilter: (req, file, cb) => {
+    const name = sanitizeFilename(file.originalname);
+    cb(null, Boolean(name) && isVideoFile(name));
+  },
   limits: { fileSize: 8 * 1024 ** 3, files: 50 },
 });
 

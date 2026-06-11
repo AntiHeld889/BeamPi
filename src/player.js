@@ -332,6 +332,11 @@ export class Player extends EventEmitter {
       const sock = net.createConnection(SOCKET_PATH);
       sock.setEncoding('utf8');
       sock.on('connect', () => {
+        if (this.#proc !== proc || this.#stopped) {
+          // mpv wurde zwischenzeitlich neu gestartet – veralteten Socket verwerfen
+          sock.destroy();
+          return;
+        }
         this.#sock = sock;
         this.#buffer = '';
         this.#connected = true;

@@ -375,7 +375,14 @@
       const info = data.playback;
       if (!info || info.video !== live.src || info.position === null) return;
       const target = info.position + 0.35; // kleine Latenz-Kompensation
-      if (Math.abs(video.currentTime - target) > 1.2) video.currentTime = target;
+      let drift = Math.abs(video.currentTime - target);
+      // Beim Loop zählt der zyklische Abstand – sonst springt die Vorschau
+      // bei jedem Wrap (z. B. mpv bei 0.2s, Browser bei 3.9s eines 4s-Loops).
+      const duration = info.duration || video.duration;
+      if (video.loop && Number.isFinite(duration) && duration > 0) {
+        drift = Math.min(drift, Math.abs(duration - drift));
+      }
+      if (drift > 1.2) video.currentTime = target;
       if (video.paused && !info.paused) video.play().catch(() => {});
     } catch {
       /* Netzwerkfehler ignorieren */
