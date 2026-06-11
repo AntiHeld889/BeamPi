@@ -845,7 +845,7 @@
 
     const audioInput = el('input', { class: 'input mono', type: 'text', value: settings.audio_output, placeholder: 'z. B. alsa/plughw:0,0 – leer = auto' });
     const drmModeSelect = el('select', { class: 'input mono' },
-      [['', 'Automatisch (native Auflösung)'], ['1920x1080', '1920 × 1080 (Full HD)'], ['1280x720', '1280 × 720 (HD)'], ['3840x2160', '3840 × 2160 (4K)']].map(([value, label]) =>
+      [['', 'Automatisch (native Auflösung)'], ['1920x1080@60', '1920 × 1080, 60 Hz (Full HD)'], ['1280x720@60', '1280 × 720, 60 Hz (HD)'], ['3840x2160@60', '3840 × 2160, 60 Hz (4K)']].map(([value, label]) =>
         el('option', { value, ...(settings.drm_mode === value ? { selected: 'selected' } : {}) }, label)
       )
     );

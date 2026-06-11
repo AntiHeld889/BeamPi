@@ -236,6 +236,19 @@ export class Player extends EventEmitter {
     const drmMode = this.getDrmMode();
     if (drmMode) args.push(`--drm-mode=${drmMode}`);
 
+    // Läuft kein Compositor (Wayland-Socket fehlt) und kein X (kein DISPLAY),
+    // den DRM-Kontext erzwingen. Ohne das fällt mpv auf vo=sdl zurück und
+    // rendert UNSICHTBAR ins Leere, während der Status "spielt" meldet.
+    const waylandSocket = env.WAYLAND_DISPLAY
+      ? env.WAYLAND_DISPLAY.startsWith('/')
+        ? env.WAYLAND_DISPLAY
+        : path.join(env.XDG_RUNTIME_DIR ?? '', env.WAYLAND_DISPLAY)
+      : null;
+    const haveWayland = waylandSocket ? fs.existsSync(waylandSocket) : false;
+    if (!haveWayland && !env.DISPLAY) {
+      args.push('--vo=gpu', '--gpu-context=drm');
+    }
+
     // Wichtig: DISPLAY hier NICHT künstlich setzen. Ein gesetztes DISPLAY ohne
     // laufenden X-Server schickt mpv in einen fehlerhaften Fallback-Pfad mit
     // massiven Frame-Drops (~14/s auf dem Pi 4). Ohne Display-Variablen nutzt
