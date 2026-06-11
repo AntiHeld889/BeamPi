@@ -208,6 +208,10 @@ export class Player extends EventEmitter {
       /* egal */
     }
 
+    // Wichtig: DISPLAY hier NICHT künstlich setzen. Ein gesetztes DISPLAY ohne
+    // laufenden X-Server schickt mpv in einen fehlerhaften Fallback-Pfad.
+    const env = { ...process.env };
+
     const args = [
       '--idle=yes',
       '--force-window=immediate',
@@ -248,12 +252,6 @@ export class Player extends EventEmitter {
     if (!haveWayland && !env.DISPLAY) {
       args.push('--vo=gpu', '--gpu-context=drm');
     }
-
-    // Wichtig: DISPLAY hier NICHT künstlich setzen. Ein gesetztes DISPLAY ohne
-    // laufenden X-Server schickt mpv in einen fehlerhaften Fallback-Pfad mit
-    // massiven Frame-Drops (~14/s auf dem Pi 4). Ohne Display-Variablen nutzt
-    // mpv DRM/KMS direkt – der schnellste Weg für eine dedizierte Player-Box.
-    const env = { ...process.env };
 
     let proc;
     try {
