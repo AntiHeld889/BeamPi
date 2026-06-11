@@ -843,7 +843,28 @@
       )
     );
 
-    const audioInput = el('input', { class: 'input mono', type: 'text', value: settings.audio_output, placeholder: 'z. B. alsa/plughw:0,0 – leer = auto' });
+    // Audio-Geräte von mpv erfragen und als Auswahl anbieten
+    let audioDevices = [];
+    try {
+      audioDevices = (await api('/api/audio-devices')).devices || [];
+    } catch {
+      /* mpv evtl. gerade nicht verbunden – Auswahl zeigt dann nur "auto" */
+    }
+    const currentAudio = settings.audio_output || 'auto';
+    const audioSelect = el('select', { class: 'input mono' },
+      audioDevices.length === 0 ? el('option', { value: 'auto' }, 'Automatisch (Systemstandard)') : null,
+      audioDevices.map((device) =>
+        el('option', {
+          value: device.name,
+          title: device.name,
+          ...(currentAudio === device.name ? { selected: 'selected' } : {}),
+        }, device.name === 'auto' ? 'Automatisch (Systemstandard)' : `${device.description} (${device.name})`)
+      ),
+      // Gespeicherten Wert anbieten, auch wenn er gerade nicht in der Liste ist
+      currentAudio !== 'auto' && !audioDevices.some((d) => d.name === currentAudio)
+        ? el('option', { value: currentAudio, selected: 'selected' }, `${currentAudio} (gespeichert)`)
+        : null
+    );
     const drmModeSelect = el('select', { class: 'input mono' },
       [['', 'Automatisch (native Auflösung)'], ['1920x1080@60', '1920 × 1080, 60 Hz (Full HD)'], ['1280x720@60', '1280 × 720, 60 Hz (HD)'], ['3840x2160@60', '3840 × 2160, 60 Hz (4K)']].map(([value, label]) =>
         el('option', { value, ...(settings.drm_mode === value ? { selected: 'selected' } : {}) }, label)
@@ -889,7 +910,7 @@
         const result = await api('/api/settings', {
           method: 'PUT',
           json: {
-            audio_output: audioInput.value,
+            audio_output: audioSelect.value,
             drm_mode: drmModeSelect.value,
             trigger_start_webhook_url: startHook.value,
             trigger_end_webhook_url: endHook.value,
@@ -924,9 +945,9 @@
         el('div', { class: 'settings-grid' },
           el('div', {},
             el('div', { class: 'field' },
-              el('label', {}, 'Audioausgabe (mpv Audio-Device)'),
-              audioInput,
-              el('div', { class: 'hint' }, '„auto" oder leer lassen für automatische Auswahl durch mpv.')
+              el('label', {}, 'Audioausgabe'),
+              audioSelect,
+              el('div', { class: 'hint' }, 'Geräteliste kommt von mpv. „HDMI" wählen, um den Ton über den Beamer/Monitor auszugeben; bei Änderung startet der Player neu.')
             ),
             el('div', { class: 'field' },
               el('label', {}, 'Ausgabe-Auflösung'),

@@ -234,6 +234,12 @@ app.get('/api/player/position', async (req, res) => {
   res.json({ playback: info });
 });
 
+// Verfügbare Audio-Geräte (von mpv erfragt)
+app.get('/api/audio-devices', async (req, res) => {
+  const devices = await player.getAudioDeviceList();
+  res.json({ devices, current: settings.getAudioOutput() });
+});
+
 app.get('/api/playlists', (req, res) => {
   res.json({ playlists: serializePlaylists() });
 });

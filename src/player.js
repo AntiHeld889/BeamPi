@@ -112,6 +112,15 @@ export class Player extends EventEmitter {
     };
   }
 
+  /**
+   * Verfügbare Audio-Geräte, wie mpv sie sieht.
+   * @returns {Promise<Array<{name: string, description: string}>>}
+   */
+  async getAudioDeviceList() {
+    const list = await this.#request(['get_property', 'audio-device-list'], 1500);
+    return Array.isArray(list) ? list : [];
+  }
+
   getStatus() {
     let mode = 'idle';
     if (this.#playingTrigger) mode = 'trigger';
