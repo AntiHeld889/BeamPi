@@ -29,6 +29,7 @@ const player = new Player({
   getAudioDevice: () => settings.getAudioOutput(),
   getStartWebhookUrl: () => settings.getTriggerStartWebhook(),
   getEndWebhookUrl: () => settings.getTriggerEndWebhook(),
+  getDrmMode: () => settings.getDrmMode(),
 });
 
 // GPIO-Taster: ein Druck wirkt wie der Trigger-Button im Dashboard
@@ -352,6 +353,14 @@ app.put('/api/settings', (req, res) => {
   const warnings = [];
 
   const previousAudio = settings.getAudioOutput();
+  const previousDrmMode = settings.getDrmMode();
+  if (typeof body.drm_mode === 'string') {
+    const value = body.drm_mode.trim();
+    if (value !== '' && !/^\d{3,4}x\d{3,4}(@\d{1,3})?$/.test(value)) {
+      return res.status(400).json({ status: 'error', message: 'Ausgabe-Auflösung bitte als BREITExHÖHE angeben, z. B. 1920x1080.' });
+    }
+    settings.setDrmMode(value);
+  }
   if (typeof body.audio_output === 'string') settings.setAudioOutput(body.audio_output);
   if (typeof body.trigger_start_webhook_url === 'string') settings.setTriggerStartWebhook(body.trigger_start_webhook_url);
   if (typeof body.trigger_end_webhook_url === 'string') settings.setTriggerEndWebhook(body.trigger_end_webhook_url);
@@ -392,6 +401,9 @@ app.put('/api/settings', (req, res) => {
   if (settings.getAudioOutput() !== previousAudio) {
     player.restart();
     warnings.push('Audio-Gerät geändert – der Player wird neu gestartet.');
+  } else if (settings.getDrmMode() !== previousDrmMode) {
+    player.restart();
+    warnings.push('Ausgabe-Auflösung geändert – der Player wird neu gestartet.');
   }
 
   if (typeof body.gpio_pin === 'string') {

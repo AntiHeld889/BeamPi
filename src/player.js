@@ -38,11 +38,12 @@ export class Player extends EventEmitter {
   #requestId = 0;
   #pending = new Map();
 
-  constructor({ videoDir, getAudioDevice, getStartWebhookUrl, getEndWebhookUrl }) {
+  constructor({ videoDir, getAudioDevice, getStartWebhookUrl, getEndWebhookUrl, getDrmMode }) {
     super();
     this.videoDir = path.resolve(videoDir);
     fs.mkdirSync(this.videoDir, { recursive: true });
     this.getAudioDevice = getAudioDevice;
+    this.getDrmMode = getDrmMode ?? (() => '');
     this.getStartWebhookUrl = getStartWebhookUrl;
     this.getEndWebhookUrl = getEndWebhookUrl;
     this.#startMpv();
@@ -229,6 +230,11 @@ export class Player extends EventEmitter {
     if (audioDevice && audioDevice !== 'auto') {
       args.push(`--audio-device=${audioDevice}`);
     }
+
+    // Ausgabe-Auflösung bei Direktausgabe ohne Desktop (DRM/KMS). Entlastet
+    // z. B. den Pi 4 an 4K-Displays massiv; unter Wayland/X11 ohne Wirkung.
+    const drmMode = this.getDrmMode();
+    if (drmMode) args.push(`--drm-mode=${drmMode}`);
 
     const env = { ...process.env };
     env.DISPLAY ??= ':0';

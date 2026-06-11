@@ -844,6 +844,11 @@
     );
 
     const audioInput = el('input', { class: 'input mono', type: 'text', value: settings.audio_output, placeholder: 'z. B. alsa/plughw:0,0 – leer = auto' });
+    const drmModeSelect = el('select', { class: 'input mono' },
+      [['', 'Automatisch (native Auflösung)'], ['1920x1080', '1920 × 1080 (Full HD)'], ['1280x720', '1280 × 720 (HD)'], ['3840x2160', '3840 × 2160 (4K)']].map(([value, label]) =>
+        el('option', { value, ...(settings.drm_mode === value ? { selected: 'selected' } : {}) }, label)
+      )
+    );
     const startHook = el('input', { class: 'input mono', type: 'url', value: settings.trigger_start_webhook_url, placeholder: 'https://example.com/webhook/start' });
     const endHook = el('input', { class: 'input mono', type: 'url', value: settings.trigger_end_webhook_url, placeholder: 'https://example.com/webhook/end' });
     const dirInput = el('input', { class: 'input mono', type: 'text', value: settings.video_directory });
@@ -885,6 +890,7 @@
           method: 'PUT',
           json: {
             audio_output: audioInput.value,
+            drm_mode: drmModeSelect.value,
             trigger_start_webhook_url: startHook.value,
             trigger_end_webhook_url: endHook.value,
             video_directory: dirInput.value,
@@ -921,6 +927,12 @@
               el('label', {}, 'Audioausgabe (mpv Audio-Device)'),
               audioInput,
               el('div', { class: 'hint' }, '„auto" oder leer lassen für automatische Auswahl durch mpv.')
+            ),
+            el('div', { class: 'field' },
+              el('label', {}, 'Ausgabe-Auflösung'),
+              drmModeSelect,
+              el('div', { class: 'hint' },
+                'Wirkt bei Direktausgabe ohne Desktop (DRM). Tipp für Pi 4 an 4K-Displays: 1920×1080 – das Display skaliert selbst, die Wiedergabe wird flüssig.')
             ),
             el('div', { class: 'field' },
               el('label', {}, 'Videoverzeichnis'),

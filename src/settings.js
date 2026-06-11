@@ -19,6 +19,7 @@ const DEFAULTS = {
   auto_start_playlist: '',
   gpio_pin: '',
   gpio_debounce_ms: '250',
+  drm_mode: '',
 };
 
 export class SettingsManager {
@@ -118,5 +119,16 @@ export class SettingsManager {
   getGpioDebounceMs() {
     const value = Number(this.settings.gpio_debounce_ms);
     return Number.isFinite(value) && value >= 50 && value <= 5000 ? value : 250;
+  }
+
+  /** @param {string} mode z. B. '1920x1080' oder '' für automatisch */
+  setDrmMode(mode) {
+    this.settings.drm_mode = (mode || '').trim();
+    this.save();
+  }
+
+  getDrmMode() {
+    const value = this.settings.drm_mode.trim();
+    return /^\d{3,4}x\d{3,4}(@\d{1,3})?$/.test(value) ? value : '';
   }
 }
