@@ -217,8 +217,10 @@ export class Player extends EventEmitter {
       `--input-ipc-server=${SOCKET_PATH}`,
       '--really-quiet',
       '--no-terminal',
-      // Hardware-Dekodierung (Pi: h264/hevc über V4L2-M2M bzw. rpivid)
-      '--hwdec=auto-safe',
+      // Hardware-Dekodierung explizit: v4l2m2m (h264 u. a.) und drm/rpivid (hevc).
+      // Die auto-Modi von mpv wählen die Pi-Decoder NICHT von selbst aus;
+      // bei Fehlschlag fällt mpv automatisch auf Software zurück.
+      '--hwdec=v4l2m2m-copy,drm-copy',
       // Günstige Skalierer – wichtig, wenn auf 4K hochskaliert wird (Pi-4-GPU)
       '--profile=fast',
       '--framedrop=vo',
