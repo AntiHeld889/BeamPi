@@ -60,3 +60,14 @@ Web-UI: `http://<pi-ip>:8080`
 Konfiguration über Umgebungsvariablen: `PORT` (Standard 8080),
 `BEAMPI_DATA_DIR` (Standard `./data`), `BEAMPI_VIDEO_DIR`
 (Standard-Videoverzeichnis `/opt/beampi/videos`).
+
+## Deployment
+
+`./deploy.sh` pusht zu GitHub und synchronisiert per rsync auf den Pi.
+Der Dienst wird nur neu gestartet, wenn sich Server-Code geändert hat —
+reine UI-Änderungen laufen ohne Unterbrechung der Wiedergabe ein.
+`./deploy.sh --no-push` überspringt den GitHub-Push.
+
+Das SSH-Passwort liest das Skript aus `.deploy-pass` (nicht im Repo) oder
+`$BEAMPI_SSH_PASS`; mit eingerichtetem SSH-Key braucht es gar keins.
+Host/Pfad/Port sind per `BEAMPI_HOST`, `BEAMPI_PATH`, `BEAMPI_PORT` übersteuerbar.
