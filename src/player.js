@@ -77,7 +77,8 @@ export class Player extends EventEmitter {
 
   /** Software-Lautstärke (0–100) live setzen. */
   setVolume(volume) {
-    this.#command(['set', 'volume', Math.round(volume)]);
+    // set_property statt "set": das Input-Kommando verwirft numerische Werte
+    this.#command(['set_property', 'volume', Math.round(volume)]);
   }
 
   /** mpv neu starten (z. B. nach Wechsel des Audio-Geräts). */
