@@ -494,12 +494,30 @@ h1, h2, h3 {
   max-width: 460px;
 }
 
-.volume-icon {
+.volume-mute {
   font-size: 16px;
   flex: none;
-  width: 22px;
-  text-align: center;
+  width: 34px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.14s, border-color 0.14s;
 }
+
+.volume-mute:hover {
+  background: var(--bg3);
+  border-color: var(--line2);
+}
+
+.volume-mute:active { transform: scale(0.92); }
+
+.volume-row.muted .volume-slider { opacity: 0.4; }
+.volume-row.muted .volume-label { color: var(--red); }
 
 .volume-slider {
   flex: 1;

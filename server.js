@@ -31,6 +31,7 @@ const player = new Player({
   getEndWebhookUrl: () => settings.getTriggerEndWebhook(),
   getDrmMode: () => settings.getDrmMode(),
   getVolume: () => settings.getVolume(),
+  getMuted: () => settings.getMuted(),
 });
 
 // GPIO-Taster: ein Druck wirkt wie der Trigger-Button im Dashboard
@@ -185,6 +186,7 @@ function stateSnapshot() {
     active_playlist: activePlaylist,
     active_progress: getActiveProgress(),
     volume: settings.getVolume(),
+    muted: settings.getMuted(),
   };
 }
 
@@ -236,16 +238,23 @@ app.get('/api/player/position', async (req, res) => {
   res.json({ playback: info });
 });
 
-// Lautstärke (0–100), wird gespeichert und sofort angewendet
+// Lautstärke (0–100) und/oder Stummschaltung – gespeichert und sofort angewendet
 app.put('/api/volume', (req, res) => {
-  const volume = Number(req.body?.volume);
-  if (!Number.isFinite(volume) || volume < 0 || volume > 100) {
-    return res.status(400).json({ status: 'error', message: 'Lautstärke muss zwischen 0 und 100 liegen.' });
+  const body = req.body ?? {};
+  if (body.volume !== undefined) {
+    const volume = Number(body.volume);
+    if (!Number.isFinite(volume) || volume < 0 || volume > 100) {
+      return res.status(400).json({ status: 'error', message: 'Lautstärke muss zwischen 0 und 100 liegen.' });
+    }
+    settings.setVolume(volume);
+    player.setVolume(settings.getVolume());
   }
-  settings.setVolume(volume);
-  player.setVolume(settings.getVolume());
+  if (body.muted !== undefined) {
+    settings.setMuted(Boolean(body.muted));
+    player.setMuted(settings.getMuted());
+  }
   broadcastState();
-  res.json({ status: 'ok', volume: settings.getVolume() });
+  res.json({ status: 'ok', volume: settings.getVolume(), muted: settings.getMuted() });
 });
 
 // Verfügbare Audio-Geräte (von mpv erfragt)

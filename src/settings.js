@@ -21,6 +21,7 @@ const DEFAULTS = {
   gpio_debounce_ms: '250',
   drm_mode: '',
   volume: '100',
+  muted: '0',
 };
 
 export class SettingsManager {
@@ -133,6 +134,15 @@ export class SettingsManager {
   getVolume() {
     const value = Number(this.settings.volume);
     return Number.isFinite(value) && value >= 0 && value <= 100 ? Math.round(value) : 100;
+  }
+
+  setMuted(muted) {
+    this.settings.muted = muted ? '1' : '0';
+    this.save();
+  }
+
+  getMuted() {
+    return this.settings.muted === '1';
   }
 
   /** @param {string} mode z. B. '1920x1080' oder '' für automatisch */

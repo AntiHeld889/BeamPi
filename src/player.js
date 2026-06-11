@@ -38,13 +38,14 @@ export class Player extends EventEmitter {
   #requestId = 0;
   #pending = new Map();
 
-  constructor({ videoDir, getAudioDevice, getStartWebhookUrl, getEndWebhookUrl, getDrmMode, getVolume }) {
+  constructor({ videoDir, getAudioDevice, getStartWebhookUrl, getEndWebhookUrl, getDrmMode, getVolume, getMuted }) {
     super();
     this.videoDir = path.resolve(videoDir);
     fs.mkdirSync(this.videoDir, { recursive: true });
     this.getAudioDevice = getAudioDevice;
     this.getDrmMode = getDrmMode ?? (() => '');
     this.getVolume = getVolume ?? (() => 100);
+    this.getMuted = getMuted ?? (() => false);
     this.getStartWebhookUrl = getStartWebhookUrl;
     this.getEndWebhookUrl = getEndWebhookUrl;
     this.#startMpv();
@@ -79,6 +80,11 @@ export class Player extends EventEmitter {
   setVolume(volume) {
     // set_property statt "set": das Input-Kommando verwirft numerische Werte
     this.#command(['set_property', 'volume', Math.round(volume)]);
+  }
+
+  /** Stummschaltung live setzen. */
+  setMuted(muted) {
+    this.#command(['set_property', 'mute', Boolean(muted)]);
   }
 
   /** mpv neu starten (z. B. nach Wechsel des Audio-Geräts). */
@@ -239,6 +245,7 @@ export class Player extends EventEmitter {
       '--really-quiet',
       '--no-terminal',
       `--volume=${Math.round(this.getVolume())}`,
+      `--mute=${this.getMuted() ? 'yes' : 'no'}`,
       // Hardware-Dekodierung explizit: v4l2m2m (h264 u. a.) und drm/rpivid (hevc).
       // Die auto-Modi von mpv wählen die Pi-Decoder NICHT von selbst aus;
       // bei Fehlschlag fällt mpv automatisch auf Software zurück.

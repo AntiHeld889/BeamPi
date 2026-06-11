@@ -69,6 +69,7 @@
     progress: null,
     filter: '',
     volume: 100,
+    muted: false,
   };
 
   function applySnapshot(snap) {
@@ -77,6 +78,7 @@
     S.active = snap.active_playlist ?? null;
     S.progress = snap.active_progress ?? null;
     if (typeof snap.volume === 'number') S.volume = snap.volume;
+    if (typeof snap.muted === 'boolean') S.muted = snap.muted;
     updateLamp();
     updateDeck();
     updateVolumeUI();
@@ -88,8 +90,8 @@
   let volumeDragging = false;
   let volumeSendTimer = null;
 
-  function volumeIcon(value) {
-    if (value === 0) return '🔇';
+  function volumeIcon(value, muted) {
+    if (muted || value === 0) return '🔇';
     if (value < 50) return '🔉';
     return '🔊';
   }
@@ -100,20 +102,40 @@
     if (!volumeDragging) slider.value = S.volume;
     const shown = volumeDragging ? Number(slider.value) : S.volume;
     const label = $('#volume-label');
-    if (label) label.textContent = `${shown} %`;
-    const icon = $('#volume-icon');
-    if (icon) icon.textContent = volumeIcon(shown);
+    if (label) label.textContent = S.muted ? 'Stumm' : `${shown} %`;
+    const muteBtn = $('#volume-mute');
+    if (muteBtn) {
+      muteBtn.textContent = volumeIcon(shown, S.muted);
+      muteBtn.title = S.muted ? 'Stummschaltung aufheben' : 'Stumm schalten';
+    }
+    const row = $('#volume-row');
+    if (row) row.classList.toggle('muted', S.muted);
   }
 
   function sendVolume(value) {
     clearTimeout(volumeSendTimer);
     volumeSendTimer = setTimeout(async () => {
       try {
-        await api('/api/volume', { method: 'PUT', json: { volume: Number(value) } });
+        // Ziehen am Regler hebt eine aktive Stummschaltung auf
+        const payload = { volume: Number(value) };
+        if (S.muted) payload.muted = false;
+        const result = await api('/api/volume', { method: 'PUT', json: payload });
+        if (typeof result?.muted === 'boolean') S.muted = result.muted;
+        updateVolumeUI();
       } catch (err) {
         toast(err.message, 'error');
       }
     }, 150);
+  }
+
+  async function toggleMute() {
+    try {
+      const result = await api('/api/volume', { method: 'PUT', json: { muted: !S.muted } });
+      S.muted = Boolean(result?.muted);
+      updateVolumeUI();
+    } catch (err) {
+      toast(err.message, 'error');
+    }
   }
 
   async function loadState() {
@@ -454,8 +476,12 @@
           el('div', { class: 'deck-row' }, el('b', {}, 'Loop-Video'), el('span', { class: 'mono', id: 'deck-loop' }))
         ),
         el('div', { id: 'deck-progress' }),
-        el('div', { class: 'volume-row' },
-          el('span', { class: 'volume-icon', id: 'volume-icon', 'aria-hidden': 'true' }, '🔊'),
+        el('div', { class: 'volume-row', id: 'volume-row' },
+          el('button', {
+            class: 'volume-mute', id: 'volume-mute', type: 'button',
+            title: 'Stumm schalten', 'aria-label': 'Stumm schalten',
+            onclick: toggleMute,
+          }, '🔊'),
           el('input', {
             type: 'range', min: '0', max: '100', step: '1', value: String(S.volume),
             class: 'volume-slider', id: 'volume-slider', 'aria-label': 'Lautstärke',
