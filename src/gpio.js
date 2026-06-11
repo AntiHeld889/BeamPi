@@ -23,6 +23,7 @@ export class GpioButton extends EventEmitter {
   #error = null;
   #running = false;
   #versionMajor = null;
+  #generation = 0;
 
   /** @param {number|null} pin BCM-Pin oder null zum Deaktivieren */
   configure(pin, minIntervalMs = 250) {
@@ -55,6 +56,7 @@ export class GpioButton extends EventEmitter {
   }
 
   #teardown() {
+    this.#generation += 1; // laufende async #start()-Aufrufe entwerten
     clearTimeout(this.#retryTimer);
     this.#retryTimer = null;
     if (this.#proc) {
@@ -82,9 +84,12 @@ export class GpioButton extends EventEmitter {
 
   async #start() {
     if (this.#stopped || this.#pin === null) return;
+    const generation = this.#generation;
 
     if (this.#versionMajor === null) {
       this.#versionMajor = await this.#detectVersion();
+      // Wurde während des Wartens neu konfiguriert, diesen Start abbrechen
+      if (generation !== this.#generation || this.#stopped) return;
       if (this.#versionMajor === null) {
         this.#error = 'gpiomon wurde nicht gefunden – Paket "gpiod" installieren.';
         console.error(`GPIO: ${this.#error}`);

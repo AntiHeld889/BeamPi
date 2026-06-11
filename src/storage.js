@@ -24,7 +24,15 @@ export class Storage {
 
   #writeJson(file, payload) {
     const tmp = `${file}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify(payload, null, 2), 'utf8');
+    // fsync vor rename, sonst kann ext4 nach Stromausfall eine leere Datei
+    // hinterlassen (rename committet vor den Daten)
+    const fd = fs.openSync(tmp, 'w');
+    try {
+      fs.writeSync(fd, JSON.stringify(payload, null, 2));
+      fs.fsyncSync(fd);
+    } finally {
+      fs.closeSync(fd);
+    }
     fs.renameSync(tmp, file);
   }
 

@@ -24,8 +24,10 @@ fi
 
 if [[ -n "$PASS" ]]; then
   command -v sshpass >/dev/null || { echo "✗ sshpass fehlt (brew install sshpass)"; exit 1; }
-  SSH=(sshpass -p "$PASS" ssh)
-  RSYNC_RSH="sshpass -p $PASS ssh"
+  # -e statt -p: Passwort landet nicht in der Prozessliste
+  export SSHPASS="$PASS"
+  SSH=(sshpass -e ssh)
+  RSYNC_RSH="sshpass -e ssh"
 else
   SSH=(ssh)
   RSYNC_RSH="ssh"
@@ -44,10 +46,11 @@ fi
 
 # --- 2) Sync auf den Pi -----------------------------------------------------------
 echo "→ Synchronisiere nach $PI_HOST:$PI_PATH …"
+# '^<' = übertragene Dateien, '^\*deleting' = auf dem Pi entfernte Dateien
 CHANGES="$(rsync -azi --delete -e "$RSYNC_RSH" \
   --exclude node_modules --exclude data --exclude videos \
   --exclude .git --exclude .deploy-pass --exclude .DS_Store \
-  ./ "$PI_HOST:$PI_PATH/" | grep '^<' || true)"
+  ./ "$PI_HOST:$PI_PATH/" | grep -E '^(<|\*deleting)' || true)"
 
 if [[ -z "$CHANGES" ]]; then
   echo "✓ Pi ist bereits aktuell – nichts zu tun."
@@ -65,7 +68,8 @@ fi
 if awk '{print $2}' <<< "$CHANGES" | grep -qE '^(server\.js|src/|package(-lock)?\.json|deploy/)'; then
   echo "→ Server-Code geändert – starte beampi-Dienst neu …"
   if [[ -n "$PASS" ]]; then
-    "${SSH[@]}" "$PI_HOST" "echo '$PASS' | sudo -S systemctl restart beampi 2>/dev/null"
+    # Passwort über stdin statt im Kommando (ps-sicher, robust gegen Sonderzeichen)
+    printf '%s\n' "$PASS" | "${SSH[@]}" "$PI_HOST" "sudo -S systemctl restart beampi 2>/dev/null"
   else
     # Ohne Passwort klappt sudo nur mit NOPASSWD-Regel – sonst klare Meldung
     "${SSH[@]}" "$PI_HOST" "sudo -n systemctl restart beampi" || {

@@ -166,6 +166,7 @@ function triggerNext() {
       err instanceof VideoNotFoundError
         ? `Video ${video} wurde nicht gefunden.`
         : `Ungültiger Videopfad: ${err.message}`;
+    broadcastState(); // der Index hat sich trotzdem bewegt – Clients informieren
     return { ok: false, error: message };
   }
   broadcastState();
@@ -236,6 +237,7 @@ function stateSnapshot() {
     volume: settings.getVolume(),
     muted: settings.getMuted(),
     auto_trigger: autoTriggerSnapshot(),
+    now: Date.now(), // für driftfreie Countdown-Anzeige im Client
   };
 }
 
@@ -460,26 +462,36 @@ app.put('/api/settings', (req, res) => {
   const body = req.body ?? {};
   const warnings = [];
 
-  const previousAudio = settings.getAudioOutput();
-  const previousDrmMode = settings.getDrmMode();
+  // --- Erst ALLES validieren, dann anwenden – sonst bleiben bei einem
+  // Fehler mittendrin halb übernommene Einstellungen zurück. ---------------
   if (typeof body.drm_mode === 'string') {
     const value = body.drm_mode.trim();
     if (value !== '' && !/^\d{3,4}x\d{3,4}(@\d{1,3})?$/.test(value)) {
       return res.status(400).json({ status: 'error', message: 'Ausgabe-Auflösung bitte als BREITExHÖHE angeben, z. B. 1920x1080.' });
     }
-    settings.setDrmMode(value);
   }
-  if (typeof body.audio_output === 'string') settings.setAudioOutput(body.audio_output);
-  if (typeof body.trigger_start_webhook_url === 'string') settings.setTriggerStartWebhook(body.trigger_start_webhook_url);
-  if (typeof body.trigger_end_webhook_url === 'string') settings.setTriggerEndWebhook(body.trigger_end_webhook_url);
-
   if (typeof body.auto_start_playlist === 'string') {
     const name = body.auto_start_playlist.trim();
     if (name && !playlists.has(name)) {
       return res.status(400).json({ status: 'error', message: 'Die ausgewählte Playlist wurde nicht gefunden.' });
     }
-    settings.setAutoStartPlaylist(name);
   }
+  if (typeof body.gpio_pin === 'string' && body.gpio_pin.trim() !== '') {
+    const pin = Number(body.gpio_pin.trim());
+    if (!Number.isInteger(pin) || pin < 0 || pin > 27) {
+      return res.status(400).json({ status: 'error', message: 'GPIO-Pin muss eine BCM-Nummer zwischen 0 und 27 sein.' });
+    }
+  }
+  if (body.gpio_debounce_ms !== undefined) {
+    const debounce = Number(body.gpio_debounce_ms);
+    if (!Number.isFinite(debounce) || debounce < 50 || debounce > 5000) {
+      return res.status(400).json({ status: 'error', message: 'Entprellzeit muss zwischen 50 und 5000 ms liegen.' });
+    }
+  }
+
+  // --- Anwenden ------------------------------------------------------------
+  const previousAudio = settings.getAudioOutput();
+  const previousDrmMode = settings.getDrmMode();
 
   if (typeof body.video_directory === 'string') {
     let updated;
@@ -506,30 +518,20 @@ app.put('/api/settings', (req, res) => {
     }
   }
 
+  if (typeof body.drm_mode === 'string') settings.setDrmMode(body.drm_mode.trim());
+  if (typeof body.audio_output === 'string') settings.setAudioOutput(body.audio_output);
+  if (typeof body.trigger_start_webhook_url === 'string') settings.setTriggerStartWebhook(body.trigger_start_webhook_url);
+  if (typeof body.trigger_end_webhook_url === 'string') settings.setTriggerEndWebhook(body.trigger_end_webhook_url);
+  if (typeof body.auto_start_playlist === 'string') settings.setAutoStartPlaylist(body.auto_start_playlist.trim());
+  if (typeof body.gpio_pin === 'string') settings.setGpioPin(body.gpio_pin.trim());
+  if (body.gpio_debounce_ms !== undefined) settings.setGpioDebounceMs(Number(body.gpio_debounce_ms));
+
   if (settings.getAudioOutput() !== previousAudio) {
     player.restart();
     warnings.push('Audio-Gerät geändert – der Player wird neu gestartet.');
   } else if (settings.getDrmMode() !== previousDrmMode) {
     player.restart();
     warnings.push('Ausgabe-Auflösung geändert – der Player wird neu gestartet.');
-  }
-
-  if (typeof body.gpio_pin === 'string') {
-    const value = body.gpio_pin.trim();
-    if (value !== '') {
-      const pin = Number(value);
-      if (!Number.isInteger(pin) || pin < 0 || pin > 27) {
-        return res.status(400).json({ status: 'error', message: 'GPIO-Pin muss eine BCM-Nummer zwischen 0 und 27 sein.' });
-      }
-    }
-    settings.setGpioPin(value);
-  }
-  if (body.gpio_debounce_ms !== undefined) {
-    const debounce = Number(body.gpio_debounce_ms);
-    if (!Number.isFinite(debounce) || debounce < 50 || debounce > 5000) {
-      return res.status(400).json({ status: 'error', message: 'Entprellzeit muss zwischen 50 und 5000 ms liegen.' });
-    }
-    settings.setGpioDebounceMs(debounce);
   }
   applyGpioSettings();
 
@@ -575,20 +577,36 @@ const upload = multer({
     destination: (req, file, cb) => {
       try {
         const base = settings.getVideoDirectory();
-        const sub = String(req.body?.subdirectory ?? '').trim();
+        // Query-Parameter funktioniert unabhängig von der Feld-Reihenfolge im
+        // Multipart-Stream (req.body ist nur gefüllt, wenn das Feld vor den
+        // Dateien kommt – externe Clients machen das nicht immer richtig).
+        const sub = String(req.query?.subdirectory ?? req.body?.subdirectory ?? '').trim();
         const target = sub ? path.resolve(base, sub) : base;
         if (target !== base && !target.startsWith(base + path.sep)) {
           cb(new Error('Der Zielordner muss innerhalb des Videoverzeichnisses liegen.'));
           return;
         }
         fs.mkdirSync(target, { recursive: true });
+        req.beampiUploadDir = target;
         cb(null, target);
       } catch (err) {
         cb(err);
       }
     },
     filename: (req, file, cb) => {
-      cb(null, sanitizeFilename(file.originalname));
+      // Vorhandene Dateien nicht überschreiben (könnte gerade abgespielt
+      // werden) – stattdessen "name (2).mp4" usw.
+      const sanitized = sanitizeFilename(file.originalname);
+      const dir = req.beampiUploadDir ?? settings.getVideoDirectory();
+      const ext = path.extname(sanitized);
+      const stem = path.basename(sanitized, ext);
+      let candidate = sanitized;
+      let counter = 2;
+      while (fs.existsSync(path.join(dir, candidate))) {
+        candidate = `${stem} (${counter})${ext}`;
+        counter += 1;
+      }
+      cb(null, candidate);
     },
   }),
   // Ungültige Dateien überspringen statt den ganzen Upload abzubrechen

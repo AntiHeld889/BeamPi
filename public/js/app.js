@@ -71,6 +71,7 @@
     volume: 100,
     muted: false,
     autoTrigger: { enabled: false, interval_s: 300, next_at: null },
+    clockOffset: 0,
   };
 
   function applySnapshot(snap) {
@@ -78,9 +79,12 @@
     S.status = snap.status || S.status;
     S.active = snap.active_playlist ?? null;
     S.progress = snap.active_progress ?? null;
-    if (typeof snap.volume === 'number') S.volume = snap.volume;
+    // Eigene Lautstärke-Änderungen nicht von verspäteten Snapshots überschreiben
+    if (typeof snap.volume === 'number' && Date.now() - lastVolumeSentAt > 1200) S.volume = snap.volume;
     if (typeof snap.muted === 'boolean') S.muted = snap.muted;
     if (snap.auto_trigger) S.autoTrigger = snap.auto_trigger;
+    // Uhren-Offset zum Server (Pi ohne RTC kann falsch gehen)
+    if (typeof snap.now === 'number') S.clockOffset = snap.now - Date.now();
     updateLamp();
     updateDeck();
     updateVolumeUI();
@@ -117,7 +121,7 @@
       countdown.classList.toggle('hidden', S.status.mode !== 'trigger');
       return;
     }
-    const remaining = Math.max(0, Math.round((S.autoTrigger.next_at - Date.now()) / 1000));
+    const remaining = Math.max(0, Math.round((S.autoTrigger.next_at - (Date.now() + S.clockOffset)) / 1000));
     const minutes = Math.floor(remaining / 60);
     const seconds = remaining % 60;
     countdown.textContent = `Nächster Trigger in ${minutes}:${String(seconds).padStart(2, '0')}`;
@@ -137,10 +141,10 @@
       return;
     }
     try {
-      const result = await api('/api/auto-trigger', {
-        method: 'PUT',
-        json: { enabled: Boolean(toggle?.checked), interval_s: Math.max(1, total) },
-      });
+      // Beim bloßen Ausschalten das gespeicherte Intervall nicht überschreiben
+      const payload = { enabled: Boolean(toggle?.checked) };
+      if (total >= 1) payload.interval_s = total;
+      const result = await api('/api/auto-trigger', { method: 'PUT', json: payload });
       if (result?.auto_trigger) S.autoTrigger = result.auto_trigger;
       updateAutoTriggerUI();
     } catch (err) {
@@ -153,6 +157,7 @@
 
   let volumeDragging = false;
   let volumeSendTimer = null;
+  let lastVolumeSentAt = 0;
 
   function volumeIcon(value, muted) {
     if (muted || value === 0) return '🔇';
@@ -178,6 +183,7 @@
 
   function sendVolume(value) {
     clearTimeout(volumeSendTimer);
+    lastVolumeSentAt = Date.now();
     volumeSendTimer = setTimeout(async () => {
       try {
         // Ziehen am Regler hebt eine aktive Stummschaltung auf
@@ -211,8 +217,12 @@
 
   // --- SSE Live-Status -------------------------------------------------------------
 
+  let eventSource = null;
+
   function connectEvents() {
+    eventSource?.close();
     const source = new EventSource('/api/events');
+    eventSource = source;
     source.onmessage = (event) => {
       try {
         applySnapshot(JSON.parse(event.data));
@@ -221,9 +231,15 @@
       }
     };
     source.onerror = () => {
-      // EventSource verbindet selbst neu; Lampe als "offline" markieren.
       $('#lamp').className = 'lamp lamp--off';
       $('#lamp-text').textContent = 'OFFLINE';
+      // Bei endgültigem Abbruch (z. B. iOS im Hintergrund) selbst neu verbinden –
+      // EventSource gibt dann auf und reconnectet NICHT mehr von alleine.
+      if (source.readyState === EventSource.CLOSED) {
+        setTimeout(() => {
+          if (eventSource === source) connectEvents();
+        }, 3000);
+      }
     };
   }
 
@@ -325,6 +341,9 @@
       $('#theme-toggle').textContent = '☀';
       $('#theme-toggle').title = 'Zum hellen Modus wechseln';
     }
+    // Browser-/PWA-Statusleiste ans Theme anpassen
+    const meta = document.querySelector('meta[name="theme-color"]');
+    if (meta) meta.content = theme === 'light' ? '#f3efe7' : '#0a0c0f';
     localStorage.setItem('beampi-theme', theme);
   }
 
@@ -367,6 +386,7 @@
   async function syncLivePosition() {
     const video = $('#live-video');
     if (!video || !live.open || !live.src) {
+      live.src = null; // View verlassen – beim Zurückkehren Quelle neu setzen
       stopLiveTimer();
       return;
     }
@@ -420,20 +440,39 @@
 
     overlay.classList.add('hidden');
     video.loop = S.status.mode === 'loop';
-    if (live.src !== current) {
+    // Auch prüfen, ob das <video> wirklich eine Quelle hat – nach einem
+    // Seitenwechsel ist das Element neu, live.src aber noch gesetzt.
+    if (live.src !== current || !video.getAttribute('src')) {
       live.src = current;
       video.src = `/videos/${encodePath(current)}`;
-      video.play().catch(() => {});
+      playLive(video);
       syncLivePosition();
     } else if (video.paused && !document.hidden) {
       // z. B. nachdem der Browser das Video in einem Hintergrund-Tab pausiert hat
-      video.play().catch(() => {});
+      playLive(video);
     }
     startLiveTimer();
   }
 
+  /** play() mit iOS-Fallback: unmuted Autoplay ist verboten → stumm weiterspielen. */
+  function playLive(video) {
+    video.play().catch((err) => {
+      if (err?.name === 'NotAllowedError' && !video.muted) {
+        live.muted = true;
+        localStorage.setItem('beampi-live-muted', '1');
+        video.muted = true;
+        video.play().catch(() => {});
+        toast('Browser blockiert Autoplay mit Ton – Vorschau läuft stumm weiter.', 'info');
+        updateLive();
+      }
+    });
+  }
+
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden) {
+      // Nach Rückkehr aus dem Hintergrund: Verbindung und Zustand auffrischen
+      if (!eventSource || eventSource.readyState === EventSource.CLOSED) connectEvents();
+      loadState().catch(() => {});
       updateLive();
       syncLivePosition();
     }
@@ -453,12 +492,17 @@
 
   // --- Vorschau-Modal ------------------------------------------------------------------
 
+  let previewReturnFocus = null;
+
   function openPreview(name, relPath) {
     const modal = $('#preview-modal');
     const video = $('#preview-video');
     $('#preview-title').textContent = name || relPath;
     video.src = `/videos/${encodePath(relPath)}`;
     modal.classList.remove('hidden');
+    // Fokus in den Dialog holen (Tastatur/Screenreader), Rückkehrziel merken
+    previewReturnFocus = document.activeElement;
+    $('#preview-close').focus();
     video.play().catch(() => {});
   }
 
@@ -469,6 +513,8 @@
     video.removeAttribute('src');
     video.load();
     modal.classList.add('hidden');
+    if (previewReturnFocus?.isConnected) previewReturnFocus.focus();
+    previewReturnFocus = null;
   }
 
   $('#preview-close').addEventListener('click', closePreview);
@@ -558,6 +604,7 @@
             class: 'volume-slider', id: 'volume-slider', 'aria-label': 'Lautstärke',
             onpointerdown: () => { volumeDragging = true; },
             onpointerup: () => { volumeDragging = false; },
+            onpointercancel: () => { volumeDragging = false; updateVolumeUI(); },
             oninput: (event) => {
               updateVolumeUI();
               sendVolume(event.target.value);
@@ -694,7 +741,7 @@
 
   // --- View: Playlist-Editor ---------------------------------------------------------------------
 
-  async function viewEditor(root, editName) {
+  async function viewEditor(root, editName, isStale = () => false) {
     const isEdit = Boolean(editName);
     const playlist = isEdit ? S.playlists.find((p) => p.name === editName) : null;
     if (isEdit && !playlist) {
@@ -710,6 +757,7 @@
       toast(err.message, 'error');
       videoData = { videos: [], tree: [] };
     }
+    if (isStale()) return; // User ist während des Ladens weiternavigiert
 
     const known = new Set(videoData.videos);
     // Auswahl: bestehende Reihenfolge übernehmen (auch fehlende Dateien anzeigen)
@@ -1030,14 +1078,22 @@
 
   // --- View: Einstellungen --------------------------------------------------------------------------
 
-  async function viewSettings(root) {
+  async function viewSettings(root, isStale = () => false) {
     let data;
     try {
       data = await api('/api/settings');
     } catch (err) {
-      toast(err.message, 'error');
+      if (isStale()) return;
+      // Nicht leer lassen – Fehlerkarte mit Retry anbieten
+      root.append(
+        el('section', { class: 'card empty-state' },
+          el('p', {}, `Einstellungen konnten nicht geladen werden: ${err.message}`),
+          el('button', { class: 'btn btn--primary', onclick: render }, 'Erneut versuchen')
+        )
+      );
       return;
     }
+    if (isStale()) return;
     const settings = data.settings;
 
     root.append(
@@ -1057,6 +1113,7 @@
     } catch {
       /* mpv evtl. gerade nicht verbunden – Auswahl zeigt dann nur "auto" */
     }
+    if (isStale()) return;
     const currentAudio = settings.audio_output || 'auto';
     const audioSelect = el('select', { class: 'input mono' },
       audioDevices.length === 0 ? el('option', { value: 'auto' }, 'Automatisch (Systemstandard)') : null,
@@ -1313,11 +1370,25 @@
     if (hash === 'settings') return { view: 'settings' };
     if (hash === 'playlist/new') return { view: 'editor' };
     const editMatch = hash.match(/^playlist\/edit\/(.+)$/);
-    if (editMatch) return { view: 'editor', name: decodeURIComponent(editMatch[1]) };
+    if (editMatch) {
+      // Manche Browser liefern location.hash bereits decodiert – ein "%" im
+      // Playlist-Namen würde decodeURIComponent dann werfen lassen
+      try {
+        return { view: 'editor', name: decodeURIComponent(editMatch[1]) };
+      } catch {
+        return { view: 'editor', name: editMatch[1] };
+      }
+    }
     return { view: 'dashboard' };
   }
 
+  // Schutz gegen überlappende Renders: Views laden asynchron – navigiert der
+  // User währenddessen weiter, darf der alte Lauf nicht mehr ins DOM schreiben.
+  let renderSeq = 0;
+
   async function render() {
+    const seq = ++renderSeq;
+    const isStale = () => seq !== renderSeq;
     const route = currentRoute();
     const root = $('#app');
     root.innerHTML = '';
@@ -1329,8 +1400,8 @@
       link.classList.toggle('active', link.dataset.nav === (route.view === 'settings' ? 'settings' : 'dashboard'));
     });
 
-    if (route.view === 'settings') await viewSettings(root);
-    else if (route.view === 'editor') await viewEditor(root, route.name);
+    if (route.view === 'settings') await viewSettings(root, isStale);
+    else if (route.view === 'editor') await viewEditor(root, route.name, isStale);
     else viewDashboard(root);
   }
 

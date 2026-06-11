@@ -222,6 +222,10 @@ export class Player extends EventEmitter {
 
   #startMpv() {
     if (this.#stopped || this.#starting) return;
+    // Geplanten Auto-Restart verwerfen, sonst kann ein restart() während der
+    // 2-s-Wartezeit zu ZWEI parallelen mpv-Instanzen führen
+    clearTimeout(this.#restartTimer);
+    this.#restartTimer = null;
     this.#starting = true;
 
     try {
@@ -436,18 +440,28 @@ export class Player extends EventEmitter {
 
   #onEvent(event) {
     if (event.event !== 'end-file') return;
-    // Nur reguläres Abspielende zählt; "replace"/"stop"/"error" lösen keinen
-    // Loop-Rückfall mit Webhook aus (wie im Original).
+    // "replace"/"stop" stammen von eigenen loadfile/stop-Kommandos und werden
+    // ignoriert. "eof" = reguläres Ende. "error" (defekte Datei) muss den
+    // Zustand ebenfalls zurücksetzen, sonst bleibt der Player für immer im
+    // Trigger-Modus hängen (Deadlock bis zum Neustart).
     const reason = event.reason;
     const isEof = reason === undefined || reason === null || reason === 'eof' || reason === 0;
-    if (!isEof) return;
+    const isError = reason === 'error' || reason === 5;
+    if (!isEof && !isError) return;
 
     const wasTrigger = this.#playingTrigger;
     const finished = this.#currentVideo;
     this.#playingTrigger = false;
     this.#currentVideo = null;
     this.#currentIsLoop = false;
-    if (wasTrigger && finished) this.#sendWebhook('end', finished);
+    if (isError) {
+      console.warn(`mpv-Wiedergabefehler bei ${this.#relative(finished) ?? '?'} – Datei defekt?`);
+      if (!wasTrigger && finished && finished === this.#loopVideo) {
+        // Kaputtes Loop-Video nicht in einer Endlosschleife neu laden
+        this.#loopVideo = null;
+      }
+    }
+    if (wasTrigger && finished && isEof) this.#sendWebhook('end', finished);
     this.#pump();
     this.#emitStatus();
   }
