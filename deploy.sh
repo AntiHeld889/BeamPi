@@ -67,7 +67,11 @@ if awk '{print $2}' <<< "$CHANGES" | grep -qE '^(server\.js|src/|package(-lock)?
   if [[ -n "$PASS" ]]; then
     "${SSH[@]}" "$PI_HOST" "echo '$PASS' | sudo -S systemctl restart beampi 2>/dev/null"
   else
-    "${SSH[@]}" "$PI_HOST" "sudo systemctl restart beampi"
+    # Ohne Passwort klappt sudo nur mit NOPASSWD-Regel – sonst klare Meldung
+    "${SSH[@]}" "$PI_HOST" "sudo -n systemctl restart beampi" || {
+      echo "✗ Neustart braucht das sudo-Passwort – .deploy-pass anlegen oder BEAMPI_SSH_PASS setzen."
+      exit 1
+    }
   fi
   sleep 3
 else
