@@ -68,6 +68,7 @@
     active: null,
     progress: null,
     filter: '',
+    volume: 100,
   };
 
   function applySnapshot(snap) {
@@ -75,9 +76,44 @@
     S.status = snap.status || S.status;
     S.active = snap.active_playlist ?? null;
     S.progress = snap.active_progress ?? null;
+    if (typeof snap.volume === 'number') S.volume = snap.volume;
     updateLamp();
     updateDeck();
+    updateVolumeUI();
     if (currentRoute().view === 'dashboard') updateActiveMarkers();
+  }
+
+  // --- Lautstärke -------------------------------------------------------------
+
+  let volumeDragging = false;
+  let volumeSendTimer = null;
+
+  function volumeIcon(value) {
+    if (value === 0) return '🔇';
+    if (value < 50) return '🔉';
+    return '🔊';
+  }
+
+  function updateVolumeUI() {
+    const slider = $('#volume-slider');
+    if (!slider) return;
+    if (!volumeDragging) slider.value = S.volume;
+    const shown = volumeDragging ? Number(slider.value) : S.volume;
+    const label = $('#volume-label');
+    if (label) label.textContent = `${shown} %`;
+    const icon = $('#volume-icon');
+    if (icon) icon.textContent = volumeIcon(shown);
+  }
+
+  function sendVolume(value) {
+    clearTimeout(volumeSendTimer);
+    volumeSendTimer = setTimeout(async () => {
+      try {
+        await api('/api/volume', { method: 'PUT', json: { volume: Number(value) } });
+      } catch (err) {
+        toast(err.message, 'error');
+      }
+    }, 150);
   }
 
   async function loadState() {
@@ -417,7 +453,25 @@
           el('div', { class: 'deck-row' }, el('b', {}, 'Als Nächstes'), el('span', { class: 'mono', id: 'deck-next' })),
           el('div', { class: 'deck-row' }, el('b', {}, 'Loop-Video'), el('span', { class: 'mono', id: 'deck-loop' }))
         ),
-        el('div', { id: 'deck-progress' })
+        el('div', { id: 'deck-progress' }),
+        el('div', { class: 'volume-row' },
+          el('span', { class: 'volume-icon', id: 'volume-icon', 'aria-hidden': 'true' }, '🔊'),
+          el('input', {
+            type: 'range', min: '0', max: '100', step: '1', value: String(S.volume),
+            class: 'volume-slider', id: 'volume-slider', 'aria-label': 'Lautstärke',
+            onpointerdown: () => { volumeDragging = true; },
+            onpointerup: () => { volumeDragging = false; },
+            oninput: (event) => {
+              updateVolumeUI();
+              sendVolume(event.target.value);
+            },
+            onchange: (event) => {
+              volumeDragging = false;
+              sendVolume(event.target.value);
+            },
+          }),
+          el('span', { class: 'volume-label mono', id: 'volume-label' }, `${S.volume} %`)
+        )
       ),
       el('div', { class: 'trigger-zone' },
         el('button', { class: 'trigger-btn', id: 'trigger-btn', onclick: doTrigger, disabled: 'disabled' }, 'TRIGGER'),

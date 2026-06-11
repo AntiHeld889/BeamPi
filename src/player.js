@@ -38,12 +38,13 @@ export class Player extends EventEmitter {
   #requestId = 0;
   #pending = new Map();
 
-  constructor({ videoDir, getAudioDevice, getStartWebhookUrl, getEndWebhookUrl, getDrmMode }) {
+  constructor({ videoDir, getAudioDevice, getStartWebhookUrl, getEndWebhookUrl, getDrmMode, getVolume }) {
     super();
     this.videoDir = path.resolve(videoDir);
     fs.mkdirSync(this.videoDir, { recursive: true });
     this.getAudioDevice = getAudioDevice;
     this.getDrmMode = getDrmMode ?? (() => '');
+    this.getVolume = getVolume ?? (() => 100);
     this.getStartWebhookUrl = getStartWebhookUrl;
     this.getEndWebhookUrl = getEndWebhookUrl;
     this.#startMpv();
@@ -72,6 +73,11 @@ export class Player extends EventEmitter {
     const absolute = this.#resolveVideo(relativePath);
     this.#queue.push(absolute);
     this.#pump();
+  }
+
+  /** Software-Lautstärke (0–100) live setzen. */
+  setVolume(volume) {
+    this.#command(['set', 'volume', Math.round(volume)]);
   }
 
   /** mpv neu starten (z. B. nach Wechsel des Audio-Geräts). */
@@ -231,6 +237,7 @@ export class Player extends EventEmitter {
       `--input-ipc-server=${SOCKET_PATH}`,
       '--really-quiet',
       '--no-terminal',
+      `--volume=${Math.round(this.getVolume())}`,
       // Hardware-Dekodierung explizit: v4l2m2m (h264 u. a.) und drm/rpivid (hevc).
       // Die auto-Modi von mpv wählen die Pi-Decoder NICHT von selbst aus;
       // bei Fehlschlag fällt mpv automatisch auf Software zurück.

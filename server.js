@@ -30,6 +30,7 @@ const player = new Player({
   getStartWebhookUrl: () => settings.getTriggerStartWebhook(),
   getEndWebhookUrl: () => settings.getTriggerEndWebhook(),
   getDrmMode: () => settings.getDrmMode(),
+  getVolume: () => settings.getVolume(),
 });
 
 // GPIO-Taster: ein Druck wirkt wie der Trigger-Button im Dashboard
@@ -183,6 +184,7 @@ function stateSnapshot() {
     status: player.getStatus(),
     active_playlist: activePlaylist,
     active_progress: getActiveProgress(),
+    volume: settings.getVolume(),
   };
 }
 
@@ -232,6 +234,18 @@ app.get('/api/status', (req, res) => {
 app.get('/api/player/position', async (req, res) => {
   const info = await player.getPlaybackInfo();
   res.json({ playback: info });
+});
+
+// Lautstärke (0–100), wird gespeichert und sofort angewendet
+app.put('/api/volume', (req, res) => {
+  const volume = Number(req.body?.volume);
+  if (!Number.isFinite(volume) || volume < 0 || volume > 100) {
+    return res.status(400).json({ status: 'error', message: 'Lautstärke muss zwischen 0 und 100 liegen.' });
+  }
+  settings.setVolume(volume);
+  player.setVolume(settings.getVolume());
+  broadcastState();
+  res.json({ status: 'ok', volume: settings.getVolume() });
 });
 
 // Verfügbare Audio-Geräte (von mpv erfragt)

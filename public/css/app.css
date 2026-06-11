@@ -484,6 +484,69 @@ h1, h2, h3 {
   white-space: nowrap;
 }
 
+/* Lautstärke ---------------------------------------------------- */
+
+.volume-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 16px;
+  max-width: 460px;
+}
+
+.volume-icon {
+  font-size: 16px;
+  flex: none;
+  width: 22px;
+  text-align: center;
+}
+
+.volume-slider {
+  flex: 1;
+  appearance: none;
+  height: 8px;
+  border-radius: 4px;
+  background: var(--bg3);
+  border: 1px solid var(--line2);
+  outline: none;
+  cursor: pointer;
+}
+
+.volume-slider::-webkit-slider-thumb {
+  appearance: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, var(--amber-hot), var(--amber));
+  border: 2px solid color-mix(in srgb, var(--amber) 60%, #000);
+  box-shadow: 0 0 10px -2px var(--amber);
+  transition: transform 0.1s;
+}
+
+.volume-slider::-webkit-slider-thumb:hover { transform: scale(1.15); }
+
+.volume-slider::-moz-range-thumb {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, var(--amber-hot), var(--amber));
+  border: 2px solid color-mix(in srgb, var(--amber) 60%, #000);
+  box-shadow: 0 0 10px -2px var(--amber);
+}
+
+.volume-slider:focus-visible {
+  box-shadow: 0 0 0 3px var(--amber-dim);
+}
+
+.volume-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-dim);
+  min-width: 48px;
+  text-align: right;
+  flex: none;
+}
+
 /* Trigger-Knopf ----------------------------------------------- */
 
 .trigger-zone {

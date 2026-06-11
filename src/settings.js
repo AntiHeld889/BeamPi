@@ -20,6 +20,7 @@ const DEFAULTS = {
   gpio_pin: '',
   gpio_debounce_ms: '250',
   drm_mode: '',
+  volume: '100',
 };
 
 export class SettingsManager {
@@ -119,6 +120,19 @@ export class SettingsManager {
   getGpioDebounceMs() {
     const value = Number(this.settings.gpio_debounce_ms);
     return Number.isFinite(value) && value >= 50 && value <= 5000 ? value : 250;
+  }
+
+  /** @param {number} value 0–100 */
+  setVolume(value) {
+    const volume = Math.round(Number(value));
+    if (!Number.isFinite(volume) || volume < 0 || volume > 100) return;
+    this.settings.volume = String(volume);
+    this.save();
+  }
+
+  getVolume() {
+    const value = Number(this.settings.volume);
+    return Number.isFinite(value) && value >= 0 && value <= 100 ? Math.round(value) : 100;
   }
 
   /** @param {string} mode z. B. '1920x1080' oder '' für automatisch */
