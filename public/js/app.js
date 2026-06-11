@@ -106,9 +106,15 @@
   function updateAutoTriggerCountdown() {
     const countdown = $('#at-countdown');
     if (!countdown) return;
-    if (!S.autoTrigger.enabled || !S.autoTrigger.next_at) {
+    if (!S.autoTrigger.enabled) {
       countdown.textContent = '';
       countdown.classList.add('hidden');
+      return;
+    }
+    if (!S.autoTrigger.next_at) {
+      // Countdown wartet, bis das laufende Video zu Ende ist
+      countdown.textContent = S.status.mode === 'trigger' ? 'Pausiert bis Videoende' : '';
+      countdown.classList.toggle('hidden', S.status.mode !== 'trigger');
       return;
     }
     const remaining = Math.max(0, Math.round((S.autoTrigger.next_at - Date.now()) / 1000));

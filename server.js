@@ -51,7 +51,9 @@ function applyGpioSettings() {
   else gpio.configure(pin, settings.getGpioDebounceMs());
 }
 
-// Auto-Trigger: löst in festem Intervall den nächsten Trigger aus
+// Auto-Trigger: Countdown läuft nur, solange KEIN Video spielt. Er startet
+// erst neu, wenn das (auto, manuell oder per GPIO getriggerte) Video zu Ende
+// ist – kein fester Takt, keine Warteschlange.
 let autoTriggerTimer = null;
 let autoTriggerNextAt = null;
 
@@ -63,30 +65,36 @@ function autoTriggerSnapshot() {
   };
 }
 
-function applyAutoTrigger() {
-  clearInterval(autoTriggerTimer);
+function cancelAutoTriggerCountdown() {
+  clearTimeout(autoTriggerTimer);
   autoTriggerTimer = null;
   autoTriggerNextAt = null;
-  if (settings.getAutoTriggerEnabled()) {
-    const intervalMs = settings.getAutoTriggerIntervalS() * 1000;
-    autoTriggerNextAt = Date.now() + intervalMs;
-    autoTriggerTimer = setInterval(() => {
-      autoTriggerNextAt = Date.now() + intervalMs;
-      const status = player.getStatus();
-      // Läuft gerade ein Trigger-Video (oder wartet eins), diesen Takt
-      // überspringen statt eine Warteschlange aufzubauen.
-      if (status.mode === 'trigger' || status.queued > 0) {
-        broadcastState();
-        return;
-      }
-      const result = triggerNext();
-      if (result.ok) {
-        console.log('Auto-Trigger: nächstes Video gestartet.');
-      } else {
-        broadcastState(); // next_at trotzdem an die Clients melden
-      }
-    }, intervalMs);
-  }
+}
+
+function scheduleAutoTrigger() {
+  cancelAutoTriggerCountdown();
+  if (!settings.getAutoTriggerEnabled()) return;
+  const status = player.getStatus();
+  // Solange ein Trigger-Video läuft (oder ansteht), wartet der Countdown.
+  if (status.mode === 'trigger' || status.queued > 0) return;
+  const intervalMs = settings.getAutoTriggerIntervalS() * 1000;
+  autoTriggerNextAt = Date.now() + intervalMs;
+  autoTriggerTimer = setTimeout(() => {
+    autoTriggerTimer = null;
+    autoTriggerNextAt = null;
+    const result = triggerNext();
+    if (result.ok) {
+      console.log('Auto-Trigger: nächstes Video gestartet.');
+    } else {
+      // Kein Video möglich (z. B. keine aktive Playlist) – später erneut.
+      scheduleAutoTrigger();
+      broadcastState();
+    }
+  }, intervalMs);
+}
+
+function applyAutoTrigger() {
+  scheduleAutoTrigger();
   broadcastState();
 }
 
@@ -235,7 +243,18 @@ function broadcastState() {
   for (const client of sseClients) client.write(data);
 }
 
-player.on('status', () => broadcastState());
+player.on('status', (status) => {
+  if (settings.getAutoTriggerEnabled()) {
+    if (status.mode === 'trigger' || status.queued > 0) {
+      // Video läuft – Countdown anhalten, bis es zu Ende ist
+      cancelAutoTriggerCountdown();
+    } else if (!autoTriggerTimer) {
+      // Video ist zu Ende (oder Loop läuft wieder) – Countdown neu starten
+      scheduleAutoTrigger();
+    }
+  }
+  broadcastState();
+});
 
 // Express ------------------------------------------------------------------------
 
