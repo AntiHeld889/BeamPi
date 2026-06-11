@@ -569,9 +569,9 @@
             el('span', { class: 'at-title' }, 'Auto-Trigger')
           ),
           el('div', { class: 'at-interval' },
-            el('input', { class: 'input mono at-num', id: 'at-min', type: 'number', min: '0', max: '60', step: '1', onchange: sendAutoTrigger, 'aria-label': 'Minuten' }),
+            el('input', { class: 'input mono at-num', id: 'at-min', type: 'number', inputmode: 'numeric', min: '0', max: '60', step: '1', onchange: sendAutoTrigger, 'aria-label': 'Minuten' }),
             el('span', { class: 'at-unit' }, 'Min'),
-            el('input', { class: 'input mono at-num', id: 'at-sec', type: 'number', min: '0', max: '60', step: '1', onchange: sendAutoTrigger, 'aria-label': 'Sekunden' }),
+            el('input', { class: 'input mono at-num', id: 'at-sec', type: 'number', inputmode: 'numeric', min: '0', max: '60', step: '1', onchange: sendAutoTrigger, 'aria-label': 'Sekunden' }),
             el('span', { class: 'at-unit' }, 'Sek')
           ),
           el('div', { class: 'at-countdown mono hidden', id: 'at-countdown' })
@@ -804,8 +804,9 @@
       }
       selected.forEach((videoPath, index) => {
         const name = videoPath.split('/').pop();
-        const item = el('li', { class: 'sel-item', draggable: 'true' },
-          el('span', { class: 'grip', title: 'Ziehen zum Sortieren' }, '⠿'),
+        const grip = el('span', { class: 'grip', title: 'Ziehen zum Sortieren' }, '⠿');
+        const item = el('li', { class: 'sel-item', draggable: 'true', dataset: { selIndex: String(index) } },
+          grip,
           el('span', { class: 'idx' }, String(index + 1)),
           el('span', { class: 'sel-name', title: videoPath }, known.has(videoPath) ? videoPath : `${videoPath} (fehlt)`),
           el('span', { class: 'sel-actions' },
@@ -837,6 +838,44 @@
           const [moved] = selected.splice(dragIndex, 1);
           selected.splice(index, 0, moved);
           renderSelected();
+        });
+        // Touch-Sortierung über den Griff (HTML5-Drag&Drop gibt es auf
+        // iOS/Android nicht); Maus nutzt weiterhin das normale Drag&Drop.
+        grip.addEventListener('pointerdown', (event) => {
+          if (event.pointerType === 'mouse') return;
+          event.preventDefault();
+          try {
+            grip.setPointerCapture(event.pointerId);
+          } catch {
+            /* synthetische Events haben keine aktive Pointer-ID */
+          }
+          item.classList.add('dragging');
+          let targetIndex = index;
+          const onMove = (ev) => {
+            const under = document.elementFromPoint(ev.clientX, ev.clientY);
+            const overItem = under ? under.closest('[data-sel-index]') : null;
+            selList.querySelectorAll('.drag-over').forEach((n) => n.classList.remove('drag-over'));
+            if (overItem && overItem !== item) {
+              overItem.classList.add('drag-over');
+              targetIndex = Number(overItem.dataset.selIndex);
+            } else if (!overItem) {
+              targetIndex = index;
+            }
+          };
+          const onEnd = () => {
+            grip.removeEventListener('pointermove', onMove);
+            grip.removeEventListener('pointerup', onEnd);
+            grip.removeEventListener('pointercancel', onEnd);
+            item.classList.remove('dragging');
+            if (targetIndex !== index) {
+              const [moved] = selected.splice(index, 1);
+              selected.splice(targetIndex, 0, moved);
+            }
+            renderSelected();
+          };
+          grip.addEventListener('pointermove', onMove);
+          grip.addEventListener('pointerup', onEnd);
+          grip.addEventListener('pointercancel', onEnd);
         });
         selList.append(item);
       });
@@ -1035,11 +1074,11 @@
       )
     );
     const gpioPinInput = el('input', {
-      class: 'input mono', type: 'number', min: '0', max: '27', step: '1',
+      class: 'input mono', type: 'number', inputmode: 'numeric', min: '0', max: '27', step: '1',
       value: settings.gpio_pin, placeholder: 'z. B. 17 – leer = deaktiviert',
     });
     const gpioDebounceInput = el('input', {
-      class: 'input mono', type: 'number', min: '50', max: '5000', step: '10',
+      class: 'input mono', type: 'number', inputmode: 'numeric', min: '50', max: '5000', step: '10',
       value: settings.gpio_debounce_ms,
     });
     const gpioStatusChip = el('span', { class: 'chip' }, '');

@@ -1342,8 +1342,69 @@ hr.sep { border: none; border-top: 1px solid var(--line); margin: 22px 0; }
 ::selection { background: var(--amber); color: #20160a; }
 
 @media (max-width: 640px) {
-  .topbar { gap: 14px; }
+  .topbar {
+    gap: 8px;
+    padding-left: max(12px, env(safe-area-inset-left));
+    padding-right: max(12px, env(safe-area-inset-right));
+  }
+  .topnav { gap: 0; }
+  .topnav a { padding: 7px 10px; font-size: 14px; }
   .brand-name { display: none; }
   .lamp-text { display: none; }
+  .lamp { padding: 7px 11px; }
   .deck-row b { flex-basis: 86px; }
+  .page-head { flex-direction: column; align-items: stretch; }
+  .page-head .btn { justify-content: center; }
+  .toolbar .search-wrap { min-width: 100%; max-width: none; order: 10; }
+  .pl-actions .btn { flex: 1 1 calc(50% - 8px); }
+  .trigger-zone { align-items: center; width: 100%; }
+  .autotrigger { width: 100%; }
+  .live-controls { width: 100%; justify-content: flex-end; }
 }
+
+/* Touch-Geräte: größere Ziele, kein Hover-Verstecken, kein iOS-Auto-Zoom ----- */
+
+@media (pointer: coarse) {
+  /* iOS zoomt bei Eingabefeldern unter 16px automatisch hinein */
+  .input, select.input { font-size: 16px; }
+  .input.mono { font-size: 15px; }
+
+  .btn { padding: 12px 18px; min-height: 44px; }
+  .btn--sm { padding: 10px 14px; min-height: 40px; font-size: 14px; }
+
+  .icon-btn { width: 42px; height: 42px; font-size: 16px; }
+  .theme-toggle { width: 40px; height: 40px; }
+  .volume-mute { width: 42px; height: 42px; font-size: 18px; }
+
+  /* Datei-Aktionen im Baum ohne Hover immer anzeigen */
+  .tree-file .file-actions { opacity: 1; }
+  .tree-file { padding: 8px; }
+  .tree-folder > .folder-row { padding: 11px 8px; }
+
+  .sel-item { padding: 10px; gap: 8px; }
+  .sel-item .grip {
+    font-size: 20px;
+    padding: 6px 8px;
+    margin: -6px -4px;
+  }
+
+  .volume-slider { height: 12px; }
+  .volume-slider::-webkit-slider-thumb { width: 26px; height: 26px; }
+  .volume-slider::-moz-range-thumb { width: 24px; height: 24px; }
+
+  .at-num { width: 76px; min-height: 42px; }
+  .switch-track { width: 52px; height: 30px; }
+  .switch-knob { width: 24px; height: 24px; }
+  .switch input:checked + .switch-track .switch-knob { transform: translateX(22px); }
+}
+
+/* iPhone-Notch / Geräte mit abgerundeten Ecken --------------------------------- */
+
+.topbar {
+  padding-left: max(clamp(18px, 4vw, 44px), env(safe-area-inset-left));
+  padding-right: max(clamp(18px, 4vw, 44px), env(safe-area-inset-right));
+}
+
+.footer { padding-bottom: max(18px, env(safe-area-inset-bottom)); }
+
+.toasts { bottom: max(18px, env(safe-area-inset-bottom)); }
