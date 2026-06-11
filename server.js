@@ -51,6 +51,45 @@ function applyGpioSettings() {
   else gpio.configure(pin, settings.getGpioDebounceMs());
 }
 
+// Auto-Trigger: löst in festem Intervall den nächsten Trigger aus
+let autoTriggerTimer = null;
+let autoTriggerNextAt = null;
+
+function autoTriggerSnapshot() {
+  return {
+    enabled: settings.getAutoTriggerEnabled(),
+    interval_s: settings.getAutoTriggerIntervalS(),
+    next_at: autoTriggerNextAt,
+  };
+}
+
+function applyAutoTrigger() {
+  clearInterval(autoTriggerTimer);
+  autoTriggerTimer = null;
+  autoTriggerNextAt = null;
+  if (settings.getAutoTriggerEnabled()) {
+    const intervalMs = settings.getAutoTriggerIntervalS() * 1000;
+    autoTriggerNextAt = Date.now() + intervalMs;
+    autoTriggerTimer = setInterval(() => {
+      autoTriggerNextAt = Date.now() + intervalMs;
+      const status = player.getStatus();
+      // Läuft gerade ein Trigger-Video (oder wartet eins), diesen Takt
+      // überspringen statt eine Warteschlange aufzubauen.
+      if (status.mode === 'trigger' || status.queued > 0) {
+        broadcastState();
+        return;
+      }
+      const result = triggerNext();
+      if (result.ok) {
+        console.log('Auto-Trigger: nächstes Video gestartet.');
+      } else {
+        broadcastState(); // next_at trotzdem an die Clients melden
+      }
+    }, intervalMs);
+  }
+  broadcastState();
+}
+
 function savePlaylists() {
   storage.savePlaylists(playlists);
 }
@@ -187,6 +226,7 @@ function stateSnapshot() {
     active_progress: getActiveProgress(),
     volume: settings.getVolume(),
     muted: settings.getMuted(),
+    auto_trigger: autoTriggerSnapshot(),
   };
 }
 
@@ -255,6 +295,24 @@ app.put('/api/volume', (req, res) => {
   }
   broadcastState();
   res.json({ status: 'ok', volume: settings.getVolume(), muted: settings.getMuted() });
+});
+
+// Auto-Trigger ein/aus + Intervall (1 s bis 60 min 60 s)
+app.put('/api/auto-trigger', (req, res) => {
+  const body = req.body ?? {};
+  if (body.interval_s !== undefined) {
+    const seconds = Number(body.interval_s);
+    if (!Number.isInteger(seconds) || seconds < 1 || seconds > 3660) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Intervall muss zwischen 1 Sekunde und 60 Minuten 60 Sekunden liegen.',
+      });
+    }
+    settings.setAutoTriggerIntervalS(seconds);
+  }
+  if (body.enabled !== undefined) settings.setAutoTriggerEnabled(Boolean(body.enabled));
+  applyAutoTrigger();
+  res.json({ status: 'ok', auto_trigger: autoTriggerSnapshot() });
 });
 
 // Verfügbare Audio-Geräte (von mpv erfragt)
@@ -539,6 +597,7 @@ app.post('/api/upload', (req, res) => {
 // Start ------------------------------------------------------------------------------
 
 applyGpioSettings();
+applyAutoTrigger();
 
 const autoStart = settings.getAutoStartPlaylist();
 if (autoStart) {

@@ -70,6 +70,7 @@
     filter: '',
     volume: 100,
     muted: false,
+    autoTrigger: { enabled: false, interval_s: 300, next_at: null },
   };
 
   function applySnapshot(snap) {
@@ -79,10 +80,67 @@
     S.progress = snap.active_progress ?? null;
     if (typeof snap.volume === 'number') S.volume = snap.volume;
     if (typeof snap.muted === 'boolean') S.muted = snap.muted;
+    if (snap.auto_trigger) S.autoTrigger = snap.auto_trigger;
     updateLamp();
     updateDeck();
     updateVolumeUI();
+    updateAutoTriggerUI();
     if (currentRoute().view === 'dashboard') updateActiveMarkers();
+  }
+
+  // --- Auto-Trigger -------------------------------------------------------------
+
+  function updateAutoTriggerUI() {
+    const toggle = $('#at-toggle');
+    if (!toggle) return;
+    toggle.checked = S.autoTrigger.enabled;
+    const minutes = Math.floor(S.autoTrigger.interval_s / 60);
+    const seconds = S.autoTrigger.interval_s % 60;
+    const minInput = $('#at-min');
+    const secInput = $('#at-sec');
+    if (minInput && document.activeElement !== minInput) minInput.value = String(minutes);
+    if (secInput && document.activeElement !== secInput) secInput.value = String(seconds);
+    updateAutoTriggerCountdown();
+  }
+
+  function updateAutoTriggerCountdown() {
+    const countdown = $('#at-countdown');
+    if (!countdown) return;
+    if (!S.autoTrigger.enabled || !S.autoTrigger.next_at) {
+      countdown.textContent = '';
+      countdown.classList.add('hidden');
+      return;
+    }
+    const remaining = Math.max(0, Math.round((S.autoTrigger.next_at - Date.now()) / 1000));
+    const minutes = Math.floor(remaining / 60);
+    const seconds = remaining % 60;
+    countdown.textContent = `Nächster Trigger in ${minutes}:${String(seconds).padStart(2, '0')}`;
+    countdown.classList.remove('hidden');
+  }
+
+  setInterval(updateAutoTriggerCountdown, 1000);
+
+  async function sendAutoTrigger() {
+    const toggle = $('#at-toggle');
+    const minutes = Math.min(60, Math.max(0, Math.round(Number($('#at-min')?.value || 0))));
+    const seconds = Math.min(60, Math.max(0, Math.round(Number($('#at-sec')?.value || 0))));
+    const total = minutes * 60 + seconds;
+    if (toggle?.checked && total < 1) {
+      toast('Bitte ein Intervall von mindestens 1 Sekunde angeben.', 'error');
+      toggle.checked = false;
+      return;
+    }
+    try {
+      const result = await api('/api/auto-trigger', {
+        method: 'PUT',
+        json: { enabled: Boolean(toggle?.checked), interval_s: Math.max(1, total) },
+      });
+      if (result?.auto_trigger) S.autoTrigger = result.auto_trigger;
+      updateAutoTriggerUI();
+    } catch (err) {
+      toast(err.message, 'error');
+      updateAutoTriggerUI();
+    }
   }
 
   // --- Lautstärke -------------------------------------------------------------
@@ -501,7 +559,23 @@
       ),
       el('div', { class: 'trigger-zone' },
         el('button', { class: 'trigger-btn', id: 'trigger-btn', onclick: doTrigger, disabled: 'disabled' }, 'TRIGGER'),
-        el('span', { class: 'trigger-hint' }, 'Nächstes Video abspielen')
+        el('span', { class: 'trigger-hint' }, 'Nächstes Video abspielen'),
+        el('div', { class: 'autotrigger' },
+          el('div', { class: 'at-head' },
+            el('label', { class: 'switch' },
+              el('input', { type: 'checkbox', id: 'at-toggle', onchange: sendAutoTrigger }),
+              el('span', { class: 'switch-track' }, el('span', { class: 'switch-knob' }))
+            ),
+            el('span', { class: 'at-title' }, 'Auto-Trigger')
+          ),
+          el('div', { class: 'at-interval' },
+            el('input', { class: 'input mono at-num', id: 'at-min', type: 'number', min: '0', max: '60', step: '1', onchange: sendAutoTrigger, 'aria-label': 'Minuten' }),
+            el('span', { class: 'at-unit' }, 'Min'),
+            el('input', { class: 'input mono at-num', id: 'at-sec', type: 'number', min: '0', max: '60', step: '1', onchange: sendAutoTrigger, 'aria-label': 'Sekunden' }),
+            el('span', { class: 'at-unit' }, 'Sek')
+          ),
+          el('div', { class: 'at-countdown mono hidden', id: 'at-countdown' })
+        )
       )
     );
     root.append(deck);
@@ -602,6 +676,7 @@
     renderPlaylistGrid();
     updateLamp();
     updateDeck();
+    updateAutoTriggerUI();
   }
 
   // --- View: Playlist-Editor ---------------------------------------------------------------------

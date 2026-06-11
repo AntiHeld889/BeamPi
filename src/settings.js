@@ -22,6 +22,8 @@ const DEFAULTS = {
   drm_mode: '',
   volume: '100',
   muted: '0',
+  auto_trigger_enabled: '0',
+  auto_trigger_interval_s: '300',
 };
 
 export class SettingsManager {
@@ -143,6 +145,28 @@ export class SettingsManager {
 
   getMuted() {
     return this.settings.muted === '1';
+  }
+
+  setAutoTriggerEnabled(enabled) {
+    this.settings.auto_trigger_enabled = enabled ? '1' : '0';
+    this.save();
+  }
+
+  getAutoTriggerEnabled() {
+    return this.settings.auto_trigger_enabled === '1';
+  }
+
+  /** @param {number} seconds 1 s bis 60 min 60 s (3660 s) */
+  setAutoTriggerIntervalS(seconds) {
+    const value = Math.round(Number(seconds));
+    if (!Number.isFinite(value) || value < 1 || value > 3660) return;
+    this.settings.auto_trigger_interval_s = String(value);
+    this.save();
+  }
+
+  getAutoTriggerIntervalS() {
+    const value = Number(this.settings.auto_trigger_interval_s);
+    return Number.isInteger(value) && value >= 1 && value <= 3660 ? value : 300;
   }
 
   /** @param {string} mode z. B. '1920x1080' oder '' für automatisch */
