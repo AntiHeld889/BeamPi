@@ -46,11 +46,13 @@ fi
 
 # --- 2) Sync auf den Pi -----------------------------------------------------------
 echo "→ Synchronisiere nach $PI_HOST:$PI_PATH …"
-# '^<' = übertragene Dateien, '^\*deleting' = auf dem Pi entfernte Dateien
-CHANGES="$(rsync -azi --delete -e "$RSYNC_RSH" \
+# rsync-Fehler dürfen nicht im grep untergehen – erst Ausgabe einsammeln
+RSYNC_OUT="$(rsync -azi --delete -e "$RSYNC_RSH" \
   --exclude node_modules --exclude data --exclude videos \
   --exclude .git --exclude .deploy-pass --exclude .DS_Store \
-  ./ "$PI_HOST:$PI_PATH/" | grep -E '^(<|\*deleting)' || true)"
+  ./ "$PI_HOST:$PI_PATH/")" || { echo "✗ rsync fehlgeschlagen"; exit 1; }
+# '^<' = übertragene Dateien, '^\*deleting' = auf dem Pi entfernte Dateien
+CHANGES="$(grep -E '^(<|\*deleting)' <<< "$RSYNC_OUT" || true)"
 
 if [[ -z "$CHANGES" ]]; then
   echo "✓ Pi ist bereits aktuell – nichts zu tun."
@@ -84,7 +86,8 @@ fi
 
 # --- 5) Health-Check --------------------------------------------------------------------
 HOST_ONLY="${PI_HOST#*@}"
-if curl -fsS --max-time 5 "http://$HOST_ONLY:$PI_PORT/api/status" >/dev/null; then
+# /api/session ist auch ohne Anmeldung erreichbar
+if curl -fsS --max-time 5 "http://$HOST_ONLY:$PI_PORT/api/session" >/dev/null; then
   echo "✓ Deployment fertig – BeamPi antwortet auf http://$HOST_ONLY:$PI_PORT"
 else
   echo "✗ BeamPi antwortet nicht – bitte Journal prüfen: ssh $PI_HOST 'sudo journalctl -u beampi -n 30'"
