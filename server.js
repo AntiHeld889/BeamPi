@@ -7,6 +7,7 @@ import multer from 'multer';
 import { Storage } from './src/storage.js';
 import { SettingsManager } from './src/settings.js';
 import { VideoLibrary, isVideoFile } from './src/videos.js';
+import { MediaMeta } from './src/media.js';
 import { Player, VideoNotFoundError, InvalidVideoPathError } from './src/player.js';
 import { GpioButton } from './src/gpio.js';
 
@@ -20,6 +21,15 @@ const storage = new Storage(DATA_DIR);
 const settings = new SettingsManager(storage);
 const playlists = storage.loadPlaylists();
 const library = new VideoLibrary(() => settings.getVideoDirectory());
+const media = new MediaMeta(DATA_DIR, () => settings.getVideoDirectory());
+
+/** Relativen Pfad sicher ins Videoverzeichnis auflösen (oder null). */
+function resolveInVideoDir(relativePath) {
+  const base = settings.getVideoDirectory();
+  const absolute = path.resolve(base, relativePath);
+  if (absolute !== base && !absolute.startsWith(base + path.sep)) return null;
+  return absolute;
+}
 
 let activePlaylist = null;
 let activeIndex = 0;
@@ -437,7 +447,141 @@ app.post('/webhook/:name', (req, res) => {
 });
 
 app.get('/api/videos', (req, res) => {
-  res.json({ videos: library.list(), tree: library.tree() });
+  const files = library.listDetailed();
+  media.ensureDurations(files); // fehlende Dauern im Hintergrund ermitteln
+  let disk = null;
+  try {
+    const stats = fs.statfsSync(settings.getVideoDirectory());
+    disk = { free: stats.bsize * stats.bavail, total: stats.bsize * stats.blocks };
+  } catch {
+    /* statfs nicht verfügbar */
+  }
+  res.json({
+    videos: files.map((file) => file.path),
+    tree: library.tree(),
+    files: files.map((file) => ({
+      path: file.path,
+      size: file.size,
+      duration: media.durationFor(file.path, file.size, file.mtimeMs),
+    })),
+    disk,
+  });
+});
+
+// Thumbnail eines Videos (wird beim ersten Zugriff per ffmpeg erzeugt)
+app.get('/api/thumbs/*path', async (req, res) => {
+  const relative = Array.isArray(req.params.path) ? req.params.path.join('/') : req.params.path;
+  if (!resolveInVideoDir(relative)) return res.status(400).end();
+  const file = await media.thumbnail(relative);
+  if (!file) return res.status(404).end();
+  res.sendFile(file, { maxAge: '10m' }, (err) => {
+    if (err && !res.headersSent) res.status(404).end();
+  });
+});
+
+// Videodatei löschen
+app.delete('/api/files', (req, res) => {
+  const relative = String(req.body?.path ?? '').trim();
+  if (!relative) return res.status(400).json({ status: 'error', message: 'Kein Dateipfad angegeben.' });
+  const absolute = resolveInVideoDir(relative);
+  if (!absolute) return res.status(400).json({ status: 'error', message: 'Der Pfad muss innerhalb des Videoverzeichnisses liegen.' });
+  let stat;
+  try {
+    stat = fs.statSync(absolute);
+  } catch {
+    return res.status(404).json({ status: 'error', message: 'Datei wurde nicht gefunden.' });
+  }
+  if (!stat.isFile()) return res.status(400).json({ status: 'error', message: 'Der Pfad ist keine Datei.' });
+  try {
+    fs.rmSync(absolute);
+  } catch (err) {
+    return res.status(500).json({ status: 'error', message: `Löschen fehlgeschlagen: ${err.message}` });
+  }
+  library.invalidate();
+  const referencedBy = [...playlists.values()]
+    .filter((p) => p.loop_video === relative || p.videos.includes(relative))
+    .map((p) => p.name);
+  res.json({
+    status: 'ok',
+    warning: referencedBy.length
+      ? `Achtung: Die Datei wird noch in ${referencedBy.length === 1 ? 'der Playlist' : 'den Playlists'} ${referencedBy.join(', ')} verwendet.`
+      : undefined,
+  });
+});
+
+// Videodatei umbenennen/verschieben – Playlist-Verweise ziehen automatisch mit
+app.post('/api/files/rename', (req, res) => {
+  const from = String(req.body?.from ?? '').trim();
+  const to = String(req.body?.to ?? '').trim();
+  if (!from || !to) return res.status(400).json({ status: 'error', message: 'Quelle und Ziel angeben.' });
+  if (!isVideoFile(to)) return res.status(400).json({ status: 'error', message: 'Das Ziel muss eine Video-Dateiendung behalten.' });
+  const fromAbs = resolveInVideoDir(from);
+  const toAbs = resolveInVideoDir(to);
+  if (!fromAbs || !toAbs) return res.status(400).json({ status: 'error', message: 'Pfade müssen innerhalb des Videoverzeichnisses liegen.' });
+  if (!fs.existsSync(fromAbs)) return res.status(404).json({ status: 'error', message: 'Datei wurde nicht gefunden.' });
+  if (fs.existsSync(toAbs)) return res.status(409).json({ status: 'error', message: 'Am Zielpfad existiert bereits eine Datei.' });
+  try {
+    fs.mkdirSync(path.dirname(toAbs), { recursive: true });
+    fs.renameSync(fromAbs, toAbs);
+  } catch (err) {
+    return res.status(500).json({ status: 'error', message: `Umbenennen fehlgeschlagen: ${err.message}` });
+  }
+  library.invalidate();
+
+  // Verweise in allen Playlists aktualisieren
+  let updatedPlaylists = 0;
+  for (const playlist of playlists.values()) {
+    let touched = false;
+    if (playlist.loop_video === from) {
+      playlist.loop_video = to;
+      touched = true;
+    }
+    playlist.videos = playlist.videos.map((v) => {
+      if (v === from) {
+        touched = true;
+        return to;
+      }
+      return v;
+    });
+    if (touched) updatedPlaylists += 1;
+  }
+  if (updatedPlaylists > 0) savePlaylists();
+  if (activePlaylist) {
+    const playlist = playlists.get(activePlaylist);
+    if (playlist?.loop_video === to) {
+      try {
+        player.setLoopVideo(to);
+      } catch {
+        /* Loop lädt beim nächsten Zyklus */
+      }
+    }
+  }
+  broadcastState();
+  res.json({ status: 'ok', updated_playlists: updatedPlaylists });
+});
+
+// Leeren Ordner löschen
+app.delete('/api/folders', (req, res) => {
+  const relative = String(req.body?.path ?? '').trim();
+  if (!relative) return res.status(400).json({ status: 'error', message: 'Kein Ordner angegeben.' });
+  const absolute = resolveInVideoDir(relative);
+  if (!absolute) return res.status(400).json({ status: 'error', message: 'Der Pfad muss innerhalb des Videoverzeichnisses liegen.' });
+  let entries;
+  try {
+    entries = fs.readdirSync(absolute);
+  } catch {
+    return res.status(404).json({ status: 'error', message: 'Ordner wurde nicht gefunden.' });
+  }
+  if (entries.length > 0) {
+    return res.status(409).json({ status: 'error', message: 'Der Ordner ist nicht leer.' });
+  }
+  try {
+    fs.rmdirSync(absolute);
+  } catch (err) {
+    return res.status(500).json({ status: 'error', message: `Löschen fehlgeschlagen: ${err.message}` });
+  }
+  library.invalidate();
+  res.json({ status: 'ok' });
 });
 
 // Videodateien streamen (mit Range-Support für die Browser-Vorschau)

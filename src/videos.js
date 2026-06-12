@@ -10,8 +10,8 @@ export function isVideoFile(name) {
 }
 
 /**
- * Liefert alle Videodateien unterhalb von `dir` als sortierte,
- * POSIX-relative Pfade.
+ * Liefert alle Videodateien unterhalb von `dir` als sortierte Einträge
+ * mit POSIX-relativem Pfad, Größe und Änderungszeit.
  */
 export function scanVideos(dir) {
   const base = path.resolve(dir);
@@ -27,9 +27,15 @@ export function scanVideos(dir) {
     if (!entry.isFile() || !isVideoFile(entry.name)) continue;
     const absolute = path.join(entry.parentPath, entry.name);
     const relative = path.relative(base, absolute).split(path.sep).join('/');
-    videos.push(relative);
+    let stat;
+    try {
+      stat = fs.statSync(absolute);
+    } catch {
+      continue;
+    }
+    videos.push({ path: relative, size: stat.size, mtimeMs: stat.mtimeMs });
   }
-  videos.sort((a, b) => a.localeCompare(b, 'de'));
+  videos.sort((a, b) => a.path.localeCompare(b.path, 'de'));
   return videos;
 }
 
@@ -85,7 +91,8 @@ export class VideoLibrary {
     this.#cache = null;
   }
 
-  list() {
+  /** @returns {Array<{path: string, size: number, mtimeMs: number}>} */
+  listDetailed() {
     const dir = this.getDirectory();
     const fresh =
       this.#cache !== null &&
@@ -97,6 +104,11 @@ export class VideoLibrary {
       this.#cachedDir = dir;
     }
     return this.#cache;
+  }
+
+  /** Nur die relativen Pfade. */
+  list() {
+    return this.listDetailed().map((file) => file.path);
   }
 
   tree() {

@@ -1119,7 +1119,7 @@ select.input { appearance: none; background-image: linear-gradient(45deg, transp
 .tree-file {
   display: flex;
   align-items: center;
-  gap: 9px;
+  gap: 10px;
   padding: 6px 8px;
   border-radius: 7px;
   font-size: 13.5px;
@@ -1130,8 +1130,28 @@ select.input { appearance: none; background-image: linear-gradient(45deg, transp
 
 .tree-file.in-playlist .file-name { color: var(--amber); }
 
-.tree-file .file-name {
+.tree-file .thumb {
+  width: 58px;
+  height: 33px;
+  object-fit: cover;
+  border-radius: 5px;
+  background: var(--bg0);
+  border: 1px solid var(--line2);
+  flex: none;
+}
+
+.tree-file .thumb--missing { opacity: 0.15; }
+
+.tree-file .file-info {
   flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.tree-file .file-name {
+  display: block;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1141,10 +1161,34 @@ select.input { appearance: none; background-image: linear-gradient(45deg, transp
   color: var(--text);
 }
 
+.tree-file .file-meta {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+
 .tree-file .file-actions { display: flex; gap: 5px; opacity: 0.4; transition: opacity 0.12s; }
 .tree-file:hover .file-actions { opacity: 1; }
 
 .tree-empty { color: var(--text-faint); font-size: 13px; padding: 6px 10px; }
+
+.folder-del {
+  width: 26px;
+  height: 26px;
+  font-size: 12px;
+  margin-left: auto;
+  opacity: 0.45;
+}
+
+.folder-row:hover .folder-del { opacity: 1; }
+
+.sel-dur {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--text-faint);
+  flex: none;
+}
 
 /* Ausgewählte Videos (sortierbar) */
 .sel-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 7px; }

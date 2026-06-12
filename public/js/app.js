@@ -25,6 +25,24 @@
 
   const encodePath = (p) => p.split('/').map(encodeURIComponent).join('/');
 
+  function fmtDuration(seconds) {
+    if (!Number.isFinite(seconds) || seconds <= 0) return '–:––';
+    const total = Math.round(seconds);
+    const m = Math.floor(total / 60);
+    const s = total % 60;
+    if (m >= 60) {
+      return `${Math.floor(m / 60)}:${String(m % 60).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+    }
+    return `${m}:${String(s).padStart(2, '0')}`;
+  }
+
+  function fmtSize(bytes) {
+    if (!Number.isFinite(bytes)) return '';
+    if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
+    if (bytes >= 1024 ** 2) return `${Math.round(bytes / 1024 ** 2)} MB`;
+    return `${Math.max(1, Math.round(bytes / 1024))} kB`;
+  }
+
   // --- API ------------------------------------------------------------------
 
   async function api(path, options = {}) {
@@ -525,6 +543,17 @@
     if (event.key === 'Escape' && !$('#preview-modal').classList.contains('hidden')) closePreview();
   });
 
+  // Leertaste = Trigger (außer in Eingabefeldern/Buttons oder offenem Modal)
+  document.addEventListener('keydown', (event) => {
+    if (event.code !== 'Space' || event.repeat) return;
+    const target = event.target;
+    if (target instanceof HTMLElement && target.closest('input, textarea, select, button, a, video, [contenteditable]')) return;
+    if (!$('#preview-modal').classList.contains('hidden')) return;
+    if (!S.active) return;
+    event.preventDefault();
+    doTrigger();
+  });
+
   // --- Aktionen ---------------------------------------------------------------------------
 
   async function doTrigger() {
@@ -755,11 +784,12 @@
       videoData = await api('/api/videos');
     } catch (err) {
       toast(err.message, 'error');
-      videoData = { videos: [], tree: [] };
+      videoData = { videos: [], tree: [], files: [], disk: null };
     }
     if (isStale()) return; // User ist während des Ladens weiternavigiert
 
-    const known = new Set(videoData.videos);
+    let known = new Set(videoData.videos);
+    let fileMeta = new Map((videoData.files ?? []).map((f) => [f.path, f]));
     // Auswahl: bestehende Reihenfolge übernehmen (auch fehlende Dateien anzeigen)
     let selected = playlist ? [...playlist.videos] : [];
 
@@ -781,16 +811,19 @@
       ...(isEdit ? { readonly: 'readonly' } : {}),
     });
 
-    const loopSelect = el('select', { class: 'input mono', id: 'pl-loop' },
-      el('option', { value: '' }, '(kein Loop-Video)'),
-      videoData.videos.map((v) =>
-        el('option', { value: v, ...(playlist?.loop_video === v ? { selected: 'selected' } : {}) }, v)
-      )
-    );
-    // Falls das gespeicherte Loop-Video nicht mehr existiert, trotzdem anzeigen
-    if (playlist?.loop_video && !known.has(playlist.loop_video)) {
-      loopSelect.append(el('option', { value: playlist.loop_video, selected: 'selected' }, `${playlist.loop_video} (fehlt)`));
+    const loopSelect = el('select', { class: 'input mono', id: 'pl-loop' });
+    function rebuildLoopOptions(value) {
+      const current = value ?? loopSelect.value ?? '';
+      loopSelect.innerHTML = '';
+      loopSelect.append(el('option', { value: '' }, '(kein Loop-Video)'));
+      for (const v of videoData.videos) loopSelect.append(el('option', { value: v }, v));
+      // Falls das gespeicherte Loop-Video nicht mehr existiert, trotzdem anzeigen
+      if (current && !known.has(current)) {
+        loopSelect.append(el('option', { value: current }, `${current} (fehlt)`));
+      }
+      loopSelect.value = current;
     }
+    rebuildLoopOptions(playlist?.loop_video ?? '');
 
     root.append(
       el('section', { class: 'card card-pad', style: 'margin-bottom:18px' },
@@ -827,9 +860,17 @@
       oninput: () => renderTree(),
     });
 
+    function libSubText() {
+      const count = videoData.videos.length;
+      let text = `${count} ${count === 1 ? 'Video' : 'Videos'}`;
+      if (videoData.disk) text += ` · ${fmtSize(videoData.disk.free)} frei`;
+      return text;
+    }
+    const libSub = el('span', { class: 'sub' }, libSubText());
+
     const libPanel = el('section', { class: 'card' },
       el('div', { class: 'panel-head' },
-        el('h3', {}, 'Video-Bibliothek', el('span', { class: 'sub' }, `${videoData.videos.length} Videos gefunden`)),
+        el('h3', {}, 'Video-Bibliothek', libSub),
         el('div', { style: 'display:flex;gap:8px' },
           el('button', { class: 'btn btn--ghost btn--sm', onclick: () => toggleAllFolders(true) }, 'Alle öffnen'),
           el('button', { class: 'btn btn--ghost btn--sm', onclick: () => toggleAllFolders(false) }, 'Alle schließen')
@@ -857,7 +898,13 @@
 
     function renderSelected() {
       selList.innerHTML = '';
-      selCount.textContent = `${selected.length} ${selected.length === 1 ? 'Video' : 'Videos'}`;
+      let label = `${selected.length} ${selected.length === 1 ? 'Video' : 'Videos'}`;
+      const totalDuration = selected.reduce((sum, p) => sum + (fileMeta.get(p)?.duration || 0), 0);
+      if (selected.length > 0 && totalDuration > 0) {
+        const incomplete = selected.some((p) => fileMeta.get(p)?.duration == null);
+        label += ` · ${incomplete ? '≈ ' : ''}${fmtDuration(totalDuration)}`;
+      }
+      selCount.textContent = label;
       if (selected.length === 0) {
         selList.append(el('li', { class: 'sel-empty' }, 'Noch keine Videos ausgewählt – füge sie aus der Bibliothek hinzu.'));
         renderTreeMarkers();
@@ -870,6 +917,7 @@
           grip,
           el('span', { class: 'idx' }, String(index + 1)),
           el('span', { class: 'sel-name', title: videoPath }, known.has(videoPath) ? videoPath : `${videoPath} (fehlt)`),
+          el('span', { class: 'sel-dur' }, fileMeta.get(videoPath)?.duration != null ? fmtDuration(fileMeta.get(videoPath).duration) : ''),
           el('span', { class: 'sel-actions' },
             el('button', { class: 'icon-btn', title: 'Nach oben', disabled: index === 0 ? 'disabled' : undefined, onclick: () => move(index, -1) }, '↑'),
             el('button', { class: 'icon-btn', title: 'Nach unten', disabled: index === selected.length - 1 ? 'disabled' : undefined, onclick: () => move(index, 1) }, '↓'),
@@ -968,15 +1016,84 @@
 
     const openFolders = new Set();
 
+    // -- Dateiverwaltung ----------------------------------------------------
+
+    async function refreshLibrary(renameMap = null) {
+      try {
+        videoData = await api('/api/videos');
+      } catch (err) {
+        toast(err.message, 'error');
+        return;
+      }
+      known = new Set(videoData.videos);
+      fileMeta = new Map((videoData.files ?? []).map((f) => [f.path, f]));
+      if (renameMap) selected = selected.map((p) => renameMap.get(p) ?? p);
+      libSub.textContent = libSubText();
+      rebuildLoopOptions(renameMap ? renameMap.get(loopSelect.value) ?? loopSelect.value : undefined);
+      renderSelected(); // rendert auch den Baum neu
+    }
+
+    async function deleteFile(videoPath) {
+      if (!window.confirm(`Datei „${videoPath}" endgültig löschen?`)) return;
+      try {
+        const result = await api('/api/files', { method: 'DELETE', json: { path: videoPath } });
+        toast('Datei gelöscht.');
+        if (result?.warning) toast(result.warning, 'info');
+        await refreshLibrary();
+      } catch (err) {
+        toast(err.message, 'error');
+      }
+    }
+
+    async function renameFile(videoPath) {
+      const input = window.prompt('Neuer Pfad (relativ – anderer Ordner = verschieben):', videoPath);
+      if (input === null) return;
+      const to = input.trim();
+      if (!to || to === videoPath) return;
+      try {
+        const result = await api('/api/files/rename', { json: { from: videoPath, to } });
+        toast(result?.updated_playlists > 0
+          ? `Umbenannt – ${result.updated_playlists} Playlist(s) automatisch angepasst.`
+          : 'Umbenannt.');
+        await refreshLibrary(new Map([[videoPath, to]]));
+      } catch (err) {
+        toast(err.message, 'error');
+      }
+    }
+
+    async function deleteFolder(folderPath) {
+      if (!window.confirm(`Leeren Ordner „${folderPath}" löschen?`)) return;
+      try {
+        await api('/api/folders', { method: 'DELETE', json: { path: folderPath } });
+        toast('Ordner gelöscht.');
+        openFolders.delete(folderPath);
+        await refreshLibrary();
+      } catch (err) {
+        toast(err.message, 'error');
+      }
+    }
+
     function buildFileNode(node) {
       const inPlaylist = selected.includes(node.path);
+      const meta = fileMeta.get(node.path);
+      const metaParts = [];
+      if (meta?.duration != null) metaParts.push(fmtDuration(meta.duration));
+      if (meta?.size != null) metaParts.push(fmtSize(meta.size));
+      const thumb = el('img', { class: 'thumb', loading: 'lazy', alt: '', src: `/api/thumbs/${encodePath(node.path)}` });
+      thumb.addEventListener('error', () => thumb.classList.add('thumb--missing'));
       return el('li', { class: `tree-file${inPlaylist ? ' in-playlist' : ''}`, dataset: { filePath: node.path } },
-        el('span', { class: 'file-name', title: node.path }, node.name),
+        thumb,
+        el('div', { class: 'file-info' },
+          el('span', { class: 'file-name', title: node.path }, node.name),
+          el('span', { class: 'file-meta' }, metaParts.join(' · '))
+        ),
         el('span', { class: 'file-actions' },
           el('button', { class: 'icon-btn', title: 'Vorschau', onclick: () => openPreview(node.name, node.path) }, '▶'),
           inPlaylist
             ? el('button', { class: 'icon-btn icon-btn--danger', title: 'Entfernen', onclick: () => removeVideo(node.path) }, '✕')
-            : el('button', { class: 'icon-btn', title: 'Zur Playlist hinzufügen', onclick: () => addVideo(node.path) }, '+')
+            : el('button', { class: 'icon-btn', title: 'Zur Playlist hinzufügen', onclick: () => addVideo(node.path) }, '+'),
+          el('button', { class: 'icon-btn', title: 'Umbenennen / Verschieben', onclick: () => renameFile(node.path) }, '✎'),
+          el('button', { class: 'icon-btn icon-btn--danger', title: 'Datei löschen', onclick: () => deleteFile(node.path) }, '🗑')
         )
       );
     }
@@ -996,7 +1113,17 @@
                 if (li.classList.contains('open')) openFolders.add(node.path);
                 else openFolders.delete(node.path);
               },
-            }, el('span', { class: 'caret' }, '▶'), `${node.name}/`),
+            }, el('span', { class: 'caret' }, '▶'), `${node.name}/`,
+              node.children.length === 0
+                ? el('button', {
+                    class: 'icon-btn icon-btn--danger folder-del',
+                    title: 'Leeren Ordner löschen',
+                    onclick: (ev) => {
+                      ev.stopPropagation();
+                      deleteFolder(node.path);
+                    },
+                  }, '🗑')
+                : null),
             node.children.length
               ? buildTreeNodes(node.children)
               : el('ul', {}, el('li', { class: 'tree-empty' }, 'Keine Videos in diesem Ordner.'))
@@ -1074,6 +1201,14 @@
     }
 
     renderSelected();
+
+    // Dauern, die noch im Hintergrund ermittelt werden, einmalig nachladen
+    if (videoData.videos.length > 0 && (videoData.files ?? []).some((f) => f.duration == null)) {
+      setTimeout(() => {
+        if (isStale() || !document.querySelector('[data-file-path]')) return;
+        refreshLibrary();
+      }, 4000);
+    }
   }
 
   // --- View: Einstellungen --------------------------------------------------------------------------
