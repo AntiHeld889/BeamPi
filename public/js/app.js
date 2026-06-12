@@ -60,10 +60,21 @@
     } catch {
       /* keine JSON-Antwort */
     }
+    if (response.status === 401 && path !== '/api/login' && path !== '/api/session') {
+      handleUnauthenticated(); // Session abgelaufen → zurück zum Login
+    }
     if (!response.ok) {
       throw new Error(payload?.message || `Fehler ${response.status}`);
     }
     return payload;
+  }
+
+  function handleUnauthenticated() {
+    if (!S.authed) return;
+    S.authed = false;
+    eventSource?.close();
+    eventSource = null;
+    render();
   }
 
   // --- Toasts -----------------------------------------------------------------
@@ -90,6 +101,8 @@
     muted: false,
     autoTrigger: { enabled: false, interval_s: 300, next_at: null },
     clockOffset: 0,
+    authed: false,
+    mustChange: false,
   };
 
   function applySnapshot(snap) {
@@ -487,7 +500,7 @@
   }
 
   document.addEventListener('visibilitychange', () => {
-    if (!document.hidden) {
+    if (!document.hidden && S.authed && !S.mustChange) {
       // Nach Rückkehr aus dem Hintergrund: Verbindung und Zustand auffrischen
       if (!eventSource || eventSource.readyState === EventSource.CLOSED) connectEvents();
       loadState().catch(() => {});
@@ -549,7 +562,7 @@
     const target = event.target;
     if (target instanceof HTMLElement && target.closest('input, textarea, select, button, a, video, [contenteditable]')) return;
     if (!$('#preview-modal').classList.contains('hidden')) return;
-    if (!S.active) return;
+    if (!S.authed || !S.active) return;
     event.preventDefault();
     doTrigger();
   });
@@ -1493,10 +1506,129 @@
           ),
           uploadBtn,
           progressWrap
+        ),
+        el('section', { class: 'card card-pad' },
+          el('h3', { style: 'margin-bottom:6px' }, 'Passwort ändern'),
+          el('p', { class: 'hint', style: 'margin:0 0 14px;color:var(--text-faint);font-size:13px' },
+            'Nach der Änderung bleiben andere angemeldete Geräte abgemeldet.'),
+          buildPasswordForm()
         )
       )
     );
   }
+
+  // --- Anmeldung ---------------------------------------------------------------------------------
+
+  async function afterAuthBoot() {
+    try {
+      await loadState();
+    } catch {
+      /* Toast kommt über die API-Fehler */
+    }
+    connectEvents();
+    render();
+  }
+
+  function viewLogin(root) {
+    const userInput = el('input', { class: 'input', type: 'text', value: 'admin', autocomplete: 'username' });
+    const passInput = el('input', { class: 'input', type: 'password', autocomplete: 'current-password' });
+    const submit = async () => {
+      try {
+        const result = await api('/api/login', {
+          json: { username: userInput.value.trim(), password: passInput.value },
+        });
+        S.authed = true;
+        S.mustChange = Boolean(result?.must_change_password);
+        if (S.mustChange) render();
+        else await afterAuthBoot();
+      } catch (err) {
+        toast(err.message, 'error');
+        passInput.value = '';
+        passInput.focus();
+      }
+    };
+    for (const input of [userInput, passInput]) {
+      input.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') submit();
+      });
+    }
+    root.append(
+      el('div', { class: 'auth-wrap' },
+        el('section', { class: 'card card-pad auth-card' },
+          el('div', { class: 'auth-logo' }, 'BEAM', el('em', {}, 'PI')),
+          el('h2', {}, 'Anmelden'),
+          el('p', { class: 'auth-hint' }, 'Die Projektionssteuerung ist passwortgeschützt.'),
+          el('div', { class: 'field' }, el('label', {}, 'Benutzername'), userInput),
+          el('div', { class: 'field' }, el('label', {}, 'Passwort'), passInput),
+          el('button', { class: 'btn btn--primary', style: 'width:100%', onclick: submit }, 'Anmelden')
+        )
+      )
+    );
+    passInput.focus();
+  }
+
+  function buildPasswordForm(onSuccess) {
+    const current = el('input', { class: 'input', type: 'password', autocomplete: 'current-password' });
+    const next1 = el('input', { class: 'input', type: 'password', autocomplete: 'new-password' });
+    const next2 = el('input', { class: 'input', type: 'password', autocomplete: 'new-password' });
+    const submit = async () => {
+      if (next1.value.length < 6) {
+        toast('Das neue Passwort braucht mindestens 6 Zeichen.', 'error');
+        return;
+      }
+      if (next1.value !== next2.value) {
+        toast('Die neuen Passwörter stimmen nicht überein.', 'error');
+        return;
+      }
+      try {
+        await api('/api/password', {
+          json: { current_password: current.value, new_password: next1.value },
+        });
+        toast('Passwort geändert.');
+        current.value = next1.value = next2.value = '';
+        onSuccess?.();
+      } catch (err) {
+        toast(err.message, 'error');
+      }
+    };
+    next2.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') submit();
+    });
+    return el('div', {},
+      el('div', { class: 'field' }, el('label', {}, 'Aktuelles Passwort'), current),
+      el('div', { class: 'field' }, el('label', {}, 'Neues Passwort (min. 6 Zeichen)'), next1),
+      el('div', { class: 'field' }, el('label', {}, 'Neues Passwort wiederholen'), next2),
+      el('button', { class: 'btn btn--primary', onclick: submit }, 'Passwort speichern')
+    );
+  }
+
+  function viewPasswordChange(root) {
+    root.append(
+      el('div', { class: 'auth-wrap' },
+        el('section', { class: 'card card-pad auth-card' },
+          el('div', { class: 'auth-logo' }, 'BEAM', el('em', {}, 'PI')),
+          el('h2', {}, 'Neues Passwort festlegen'),
+          el('p', { class: 'auth-hint' }, 'Aus Sicherheitsgründen muss das Standardpasswort jetzt geändert werden.'),
+          buildPasswordForm(async () => {
+            S.mustChange = false;
+            await afterAuthBoot();
+          })
+        )
+      )
+    );
+  }
+
+  $('#logout-btn').addEventListener('click', async () => {
+    try {
+      await api('/api/logout', { method: 'POST' });
+    } catch {
+      /* Session ist ohnehin weg */
+    }
+    S.authed = false;
+    eventSource?.close();
+    eventSource = null;
+    render();
+  });
 
   // --- Router -----------------------------------------------------------------------------------
 
@@ -1531,6 +1663,18 @@
     void root.offsetHeight; // Animation neu starten
     root.style.animation = '';
 
+    document.body.classList.toggle('unauthed', !S.authed || S.mustChange);
+    $('#logout-btn').hidden = !S.authed;
+
+    if (!S.authed) {
+      viewLogin(root);
+      return;
+    }
+    if (S.mustChange) {
+      viewPasswordChange(root);
+      return;
+    }
+
     document.querySelectorAll('[data-nav]').forEach((link) => {
       link.classList.toggle('active', link.dataset.nav === (route.view === 'settings' ? 'settings' : 'dashboard'));
     });
@@ -1545,12 +1689,22 @@
   // --- Start ------------------------------------------------------------------------------------
 
   (async () => {
+    let session = { authenticated: false };
     try {
-      await loadState();
+      session = await api('/api/session');
     } catch (err) {
       toast(`Server nicht erreichbar: ${err.message}`, 'error');
     }
-    connectEvents();
+    S.authed = Boolean(session.authenticated);
+    S.mustChange = Boolean(session.must_change_password);
+    if (S.authed && !S.mustChange) {
+      try {
+        await loadState();
+      } catch (err) {
+        toast(`Server nicht erreichbar: ${err.message}`, 'error');
+      }
+      connectEvents();
+    }
     render();
   })();
 })();

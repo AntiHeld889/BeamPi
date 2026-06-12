@@ -1331,6 +1331,36 @@ select.input { appearance: none; background-image: linear-gradient(45deg, transp
   background: #000;
 }
 
+/* Anmeldung ---------------------------------------------------------- */
+
+.auth-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: max(380px, calc(100vh - 280px));
+}
+
+.auth-card { width: min(400px, 100%); }
+
+.auth-logo {
+  font-family: var(--font-display);
+  font-weight: 750;
+  font-size: 24px;
+  letter-spacing: 0.06em;
+  margin-bottom: 14px;
+}
+
+.auth-logo em { color: var(--amber); font-style: normal; }
+
+.auth-hint {
+  color: var(--text-faint);
+  font-size: 13px;
+  margin: 4px 0 18px;
+}
+
+body.unauthed .topnav,
+body.unauthed .lamp { display: none; }
+
 /* Toasts ------------------------------------------------------------ */
 
 .toasts {
@@ -1380,6 +1410,7 @@ select.input { appearance: none; background-image: linear-gradient(45deg, transp
 .muted { color: var(--text-dim); }
 .faint { color: var(--text-faint); }
 .hidden { display: none !important; }
+[hidden] { display: none !important; }
 
 hr.sep { border: none; border-top: 1px solid var(--line); margin: 22px 0; }
 

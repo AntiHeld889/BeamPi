@@ -8,6 +8,7 @@ import { Storage } from './src/storage.js';
 import { SettingsManager } from './src/settings.js';
 import { VideoLibrary, isVideoFile } from './src/videos.js';
 import { MediaMeta } from './src/media.js';
+import { Auth, LoginThrottle, SESSION_MAX_AGE_S } from './src/auth.js';
 import { Player, VideoNotFoundError, InvalidVideoPathError } from './src/player.js';
 import { GpioButton } from './src/gpio.js';
 
@@ -277,6 +278,101 @@ app.disable('x-powered-by');
 app.use(express.json({ limit: '2mb' }));
 app.use(express.urlencoded({ extended: false }));
 app.use(express.static(path.join(__dirname, 'public')));
+
+// Anmeldung -----------------------------------------------------------------------
+
+const auth = new Auth(DATA_DIR);
+const loginThrottle = new LoginThrottle();
+const SESSION_COOKIE = 'beampi_session';
+
+function sessionTokenFrom(req) {
+  const header = req.headers.cookie;
+  if (!header) return null;
+  for (const part of header.split(';')) {
+    const [name, ...rest] = part.trim().split('=');
+    if (name === SESSION_COOKIE) return rest.join('=');
+  }
+  return null;
+}
+
+function setSessionCookie(res, token) {
+  res.setHeader(
+    'Set-Cookie',
+    `${SESSION_COOKIE}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${SESSION_MAX_AGE_S}`
+  );
+}
+
+function clearSessionCookie(res) {
+  res.setHeader('Set-Cookie', `${SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`);
+}
+
+// Diese Pfade bleiben ohne Anmeldung erreichbar: Login selbst sowie die
+// Maschinen-Endpunkte für Trigger-Hardware (ESPs, Taster-Module, Webhooks).
+function isPublicPath(req) {
+  if (req.path === '/api/login' || req.path === '/api/session') return true;
+  if (req.path === '/api/trigger') return true;
+  if (req.path.startsWith('/webhook/')) return true;
+  return false;
+}
+
+app.use((req, res, next) => {
+  const needsAuth = req.path.startsWith('/api/') || req.path.startsWith('/videos/');
+  if (!needsAuth || isPublicPath(req)) return next();
+  const token = sessionTokenFrom(req);
+  if (token && auth.validateSession(token)) {
+    req.sessionToken = token;
+    return next();
+  }
+  res.status(401).json({ status: 'error', message: 'Anmeldung erforderlich.' });
+});
+
+app.get('/api/session', (req, res) => {
+  const token = sessionTokenFrom(req);
+  const authenticated = Boolean(token && auth.validateSession(token));
+  res.json({
+    authenticated,
+    username: authenticated ? auth.username : null,
+    must_change_password: authenticated ? auth.mustChangePassword : false,
+  });
+});
+
+app.post('/api/login', (req, res) => {
+  const ip = req.socket.remoteAddress ?? 'unbekannt';
+  if (!loginThrottle.check(ip)) {
+    return res.status(429).json({ status: 'error', message: 'Zu viele Fehlversuche – bitte 5 Minuten warten.' });
+  }
+  const { username, password } = req.body ?? {};
+  if (!auth.verifyCredentials(username, password)) {
+    loginThrottle.fail(ip);
+    return res.status(401).json({ status: 'error', message: 'Benutzername oder Passwort falsch.' });
+  }
+  loginThrottle.succeed(ip);
+  const token = auth.createSession();
+  setSessionCookie(res, token);
+  res.json({ status: 'ok', must_change_password: auth.mustChangePassword });
+});
+
+app.post('/api/logout', (req, res) => {
+  auth.destroySession(req.sessionToken);
+  clearSessionCookie(res);
+  res.json({ status: 'ok' });
+});
+
+app.post('/api/password', (req, res) => {
+  const { current_password: current, new_password: next } = req.body ?? {};
+  if (!auth.verifyCredentials(auth.username, String(current ?? ''))) {
+    return res.status(400).json({ status: 'error', message: 'Das aktuelle Passwort ist falsch.' });
+  }
+  const newPassword = String(next ?? '');
+  if (newPassword.length < 6) {
+    return res.status(400).json({ status: 'error', message: 'Das neue Passwort braucht mindestens 6 Zeichen.' });
+  }
+  if (newPassword === 'beampi') {
+    return res.status(400).json({ status: 'error', message: 'Bitte ein anderes Passwort als das Standardpasswort wählen.' });
+  }
+  auth.setPassword(newPassword, req.sessionToken);
+  res.json({ status: 'ok' });
+});
 
 app.get('/api/events', (req, res) => {
   res.writeHead(200, {

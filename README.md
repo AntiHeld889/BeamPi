@@ -19,6 +19,17 @@ Playlist einmal abgespielt, danach geht es zurück zum Loop.
 - GPIO-Taster als Trigger: Taster zwischen konfigurierbarem BCM-Pin und GND (interner Pull-up, Entprellung; benötigt das Paket `gpiod`)
 - HTTP-API kompatibel zum Original
 
+## Anmeldung
+
+Die Web-UI ist passwortgeschützt. Erstanmeldung: Benutzer `admin`,
+Passwort `beampi` – danach wird ein Passwortwechsel erzwungen. Die Sitzung
+bleibt 180 Tage gespeichert (Cookie). Passwort später ändern: Einstellungen →
+„Passwort ändern". Passwort vergessen: auf dem Pi `data/auth.json` löschen
+und den Dienst neu starten (setzt auf admin/beampi zurück).
+
+**Ohne Anmeldung erreichbar** bleiben die Maschinen-Endpunkte für
+Trigger-Hardware: `/api/trigger` und `/webhook/<playlist>`.
+
 ## HTTP-API
 
 | Methode | Pfad | Beschreibung |
