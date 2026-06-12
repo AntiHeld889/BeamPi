@@ -35,7 +35,11 @@ Playlist einmal abgespielt, danach geht es zurück zum Loop.
 | DELETE | `/api/playlists/<name>` | Playlist löschen |
 | POST | `/api/playlists/<name>/duplicate` | Playlist duplizieren (optional `{name}`) |
 | POST | `/api/playlists/<name>/start` | Playlist aktivieren |
-| GET | `/api/videos` | Video-Bibliothek (Liste + Baum) |
+| GET | `/api/videos` | Video-Bibliothek (Liste, Baum, Größen/Dauern, freier Speicher) |
+| GET | `/api/thumbs/<pfad>` | Thumbnail eines Videos (wird on-demand erzeugt) |
+| DELETE | `/api/files` | Videodatei löschen `{path}` |
+| POST | `/api/files/rename` | Datei umbenennen/verschieben `{from, to}` – Playlists ziehen mit |
+| DELETE | `/api/folders` | Leeren Ordner löschen `{path}` |
 | GET | `/videos/<pfad>` | Videodatei streamen (Range-Support) |
 | GET/PUT | `/api/settings` | Einstellungen lesen/schreiben |
 | POST | `/api/folders` | Ordner anlegen `{path}` |
