@@ -114,8 +114,4 @@ export class VideoLibrary {
   tree() {
     return buildVideoTree(this.list());
   }
-
-  has(relativePath) {
-    return this.list().includes(relativePath);
-  }
 }

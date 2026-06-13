@@ -53,6 +53,9 @@ Trigger-Hardware: `/api/trigger` und `/webhook/<playlist>`.
 | DELETE | `/api/folders` | Leeren Ordner löschen `{path}` |
 | GET | `/videos/<pfad>` | Videodatei streamen (Range-Support) |
 | GET/PUT | `/api/settings` | Einstellungen lesen/schreiben |
+| PUT | `/api/volume` | Lautstärke/Stumm setzen `{volume, muted}` |
+| PUT | `/api/auto-trigger` | Auto-Trigger setzen `{enabled, interval_s}` |
+| GET | `/api/audio-devices` | Verfügbare mpv-Audio-Ausgänge auflisten |
 | POST | `/api/folders` | Ordner anlegen `{path}` |
 | POST | `/api/upload` | Videos hochladen (multipart, Feld `video_files`) |
 

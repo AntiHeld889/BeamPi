@@ -92,7 +92,6 @@
 
   const S = {
     playlists: [],
-    settings: null,
     status: { mode: 'idle', running: false, current_video: null, loop_video: null },
     active: null,
     progress: null,
@@ -242,7 +241,6 @@
   async function loadState() {
     const data = await api('/api/state');
     S.playlists = data.playlists || [];
-    S.settings = data.settings || null;
     applySnapshot(data);
   }
 
@@ -1336,8 +1334,9 @@
         for (const warning of result?.warnings ?? []) toast(warning, 'info');
         renderGpioStatus(result?.gpio);
         // Kurz darauf nochmal prüfen, ob die Taster-Überwachung läuft
-        if (result?.gpio?.pin !== null) {
+        if (result?.gpio && result.gpio.pin !== null) {
           setTimeout(async () => {
+            if (isStale()) return; // View wurde inzwischen verlassen
             try {
               renderGpioStatus((await api('/api/settings')).gpio);
             } catch { /* egal */ }
