@@ -1343,8 +1343,10 @@
             } catch { /* egal */ }
           }, 1200);
         }
-        // Auto-Start-Playlist sofort aktivieren (Verhalten wie im Original)
-        if (autoSelect.value) await doStart(autoSelect.value);
+        // Auto-Start-Playlist aktivieren – aber nur, wenn sie nicht ohnehin
+        // schon läuft, sonst würde jedes Speichern eine laufende Wiedergabe
+        // (Loop/Trigger) hart neu starten.
+        if (autoSelect.value && autoSelect.value !== S.active) await doStart(autoSelect.value);
         await loadState();
       } catch (err) {
         toast(err.message, 'error');

@@ -19,7 +19,6 @@
   --red: #ff4d5e;
   --red-dim: rgba(255, 77, 94, 0.15);
   --green: #3ad6a0;
-  --green-dim: rgba(58, 214, 160, 0.13);
   --blue: #5aa9ff;
   --radius: 14px;
   --radius-sm: 9px;
@@ -46,7 +45,6 @@
   --red: #e23d4e;
   --red-dim: rgba(226, 61, 78, 0.12);
   --green: #169a72;
-  --green-dim: rgba(22, 154, 114, 0.12);
   --blue: #2f7fe0;
   --shadow: 0 16px 42px -20px rgba(86, 64, 22, 0.28);
   color-scheme: light;
@@ -1408,11 +1406,8 @@ body.unauthed .lamp { display: none; }
 /* Kleinkram ---------------------------------------------------------- */
 
 .muted { color: var(--text-dim); }
-.faint { color: var(--text-faint); }
 .hidden { display: none !important; }
 [hidden] { display: none !important; }
-
-hr.sep { border: none; border-top: 1px solid var(--line); margin: 22px 0; }
 
 ::selection { background: var(--amber); color: #20160a; }
 

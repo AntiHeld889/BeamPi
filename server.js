@@ -9,7 +9,7 @@ import { SettingsManager } from './src/settings.js';
 import { VideoLibrary, isVideoFile } from './src/videos.js';
 import { MediaMeta } from './src/media.js';
 import { Auth, LoginThrottle, SESSION_MAX_AGE_S } from './src/auth.js';
-import { Player, VideoNotFoundError, InvalidVideoPathError } from './src/player.js';
+import { Player, VideoNotFoundError } from './src/player.js';
 import { GpioButton } from './src/gpio.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -124,7 +124,6 @@ function getActiveProgress() {
     next_video_index: next + 1,
     total_videos: total,
     next_video: playlist.videos[next],
-    remaining_videos: total - next,
   };
 }
 
@@ -254,7 +253,14 @@ function stateSnapshot() {
 
 function broadcastState() {
   const data = `data: ${JSON.stringify(stateSnapshot())}\n\n`;
-  for (const client of sseClients) client.write(data);
+  for (const client of sseClients) {
+    try {
+      client.write(data);
+    } catch {
+      // Socket bereits hart getrennt – entfernen, bevor er weitere Broadcasts wirft
+      sseClients.delete(client);
+    }
+  }
 }
 
 player.on('status', (status) => {

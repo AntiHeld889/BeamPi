@@ -17,7 +17,8 @@ export class MediaMeta {
   #probing = false;
   #saveTimer = null;
   #inflightThumbs = new Map(); // key -> Promise<string|null>
-  #failedThumbs = new Set();
+  #failedThumbs = new Map(); // key -> Zeitpunkt des letzten Fehlversuchs (ms)
+  #FAILED_RETRY_MS = 5 * 60 * 1000; // nach 5 min erneut versuchen (transiente Last)
 
   constructor(dataDir, getVideoDirectory) {
     this.getVideoDirectory = getVideoDirectory;
@@ -129,12 +130,14 @@ export class MediaMeta {
     const key = this.#key(rel, found.stat);
     const file = path.join(this.#thumbDir, `${key}.jpg`);
     if (fs.existsSync(file)) return file;
-    if (this.#failedThumbs.has(key)) return null;
+    const failedAt = this.#failedThumbs.get(key);
+    if (failedAt !== undefined && Date.now() - failedAt < this.#FAILED_RETRY_MS) return null;
     if (this.#inflightThumbs.has(key)) return this.#inflightThumbs.get(key);
 
     const job = this.#generateThumb(found.absolute, file)
       .then((ok) => {
-        if (!ok) this.#failedThumbs.add(key);
+        if (ok) this.#failedThumbs.delete(key);
+        else this.#failedThumbs.set(key, Date.now());
         return ok ? file : null;
       })
       .finally(() => this.#inflightThumbs.delete(key));
