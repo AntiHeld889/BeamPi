@@ -144,6 +144,8 @@ function getActiveProgress() {
 function serializePlaylists() {
   const progress = getActiveProgress();
   return [...playlists.values()]
+    // Die flüchtige USB-Playlist nicht in der Web-UI anbieten (nicht editierbar)
+    .filter((playlist) => playlist.name !== USB_PLAYLIST_NAME)
     .sort((a, b) => a.name.localeCompare(b.name, 'de'))
     .map((playlist) => ({
       name: playlist.name,
@@ -189,10 +191,12 @@ function tryStartUsbShow() {
   }
   if (!show) return false;
 
-  // Videoverzeichnis + Auto-Trigger zur Laufzeit auf den Stick umbiegen
+  // Videoverzeichnis + Auto-Trigger zur Laufzeit auf den Stick umbiegen.
+  // Ohne Trigger-Videos (nur loop.mp4) läuft reiner Loop – kein Auto-Trigger,
+  // sonst würde der Timer endlos ins Leere feuern.
   settings.applyUsbOverrides({
     videoDirectory: show.videosDir,
-    autoTriggerEnabled: true,
+    autoTriggerEnabled: show.videos.length > 0,
     autoTriggerIntervalS: show.intervalS,
   });
   player.setVideoDirectory(show.videosDir);
@@ -256,6 +260,9 @@ function deletePlaylist(name) {
 }
 
 function duplicatePlaylist(name, requestedName) {
+  if (name === USB_PLAYLIST_NAME) {
+    throw new Error('Die USB-Stick-Playlist kann nicht dupliziert werden.');
+  }
   const original = playlists.get(name);
   if (!original) {
     const err = new Error('Playlist wurde nicht gefunden.');
@@ -493,6 +500,9 @@ app.put('/api/volume', (req, res) => {
 
 // Auto-Trigger ein/aus + Intervall (1 s bis 60 min 60 s)
 app.put('/api/auto-trigger', (req, res) => {
+  if (settings.hasUsbOverrides()) {
+    return res.status(409).json({ status: 'error', message: 'Im USB-Stick-Modus steuert der Stick (beampi.txt) den Auto-Trigger.' });
+  }
   const body = req.body ?? {};
   if (body.interval_s !== undefined) {
     const seconds = Number(body.interval_s);
@@ -784,6 +794,9 @@ app.put('/api/settings', (req, res) => {
   }
   if (typeof body.auto_start_playlist === 'string') {
     const name = body.auto_start_playlist.trim();
+    if (name === USB_PLAYLIST_NAME) {
+      return res.status(400).json({ status: 'error', message: 'Die USB-Stick-Playlist kann nicht als Auto-Start gesetzt werden.' });
+    }
     if (name && !playlists.has(name)) {
       return res.status(400).json({ status: 'error', message: 'Die ausgewählte Playlist wurde nicht gefunden.' });
     }
@@ -805,7 +818,11 @@ app.put('/api/settings', (req, res) => {
   const previousAudio = settings.getAudioOutput();
   const previousDrmMode = settings.getDrmMode();
 
-  if (typeof body.video_directory === 'string') {
+  // Im USB-Modus liegt das Videoverzeichnis fest auf dem Stick – ein Schreiben
+  // würde den Player mitten in der laufenden Show vom Stick wegreißen.
+  if (typeof body.video_directory === 'string' && settings.hasUsbOverrides()) {
+    warnings.push('Im USB-Stick-Modus ist das Videoverzeichnis fest vom Stick vorgegeben.');
+  } else if (typeof body.video_directory === 'string') {
     let updated;
     try {
       updated = settings.setVideoDirectory(body.video_directory);

@@ -19,6 +19,9 @@ fi
 
 shopt -s nullglob
 # Nur echte USB-Partitionen betrachten (per-id-Symlinks gibt es nur für USB).
+# Jede Kandidaten-Partition direkt nach $TARGET einhängen und auf "Videos/"
+# prüfen – passt sie nicht, wieder aushängen und nächste probieren. Kein
+# Probe-Mount/mktemp, daher auch kein hängendes Temp-Verzeichnis.
 for link in /dev/disk/by-id/usb-*-part*; do
   dev="$(readlink -f "$link")"
   [ -b "$dev" ] || continue
@@ -30,21 +33,13 @@ for link in /dev/disk/by-id/usb-*-part*; do
     continue
   fi
 
-  probe="$(mktemp -d)"
-  if mount -o ro "$dev" "$probe" 2>/dev/null; then
-    if [ -d "$probe/Videos" ]; then
-      umount "$probe" 2>/dev/null
-      rmdir "$probe" 2>/dev/null
-      if mount -o ro "$dev" "$TARGET" 2>/dev/null; then
-        echo "BeamPi-USB eingehängt: $dev -> $TARGET"
-        exit 0
-      fi
-      echo "Konnte $dev nicht nach $TARGET einhängen." >&2
-      exit 0
-    fi
-    umount "$probe" 2>/dev/null
+  mount -o ro "$dev" "$TARGET" 2>/dev/null || continue
+  if [ -d "$TARGET/Videos" ]; then
+    echo "BeamPi-USB eingehängt: $dev -> $TARGET"
+    exit 0
   fi
-  rmdir "$probe" 2>/dev/null
+  # Passt nicht – sauber wieder aushängen und weitersuchen.
+  umount "$TARGET" 2>/dev/null || umount -l "$TARGET" 2>/dev/null
 done
 
 echo "Kein BeamPi-USB-Stick gefunden – Normalbetrieb."

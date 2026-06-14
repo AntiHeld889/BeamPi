@@ -66,6 +66,20 @@ if grep -q 'package.json' <<< "$CHANGES"; then
   "${SSH[@]}" "$PI_HOST" "cd $PI_PATH && npm install --omit=dev"
 fi
 
+# --- 3b) systemd-Units nach /etc/systemd/system spiegeln, falls geändert -------------
+if awk '{print $2}' <<< "$CHANGES" | grep -qE '^deploy/beampi(-usb)?\.service$'; then
+  echo "→ systemd-Units geändert – installiere und aktiviere auf dem Pi …"
+  UNIT_CMD="cp $PI_PATH/deploy/beampi.service $PI_PATH/deploy/beampi-usb.service /etc/systemd/system/ && systemctl daemon-reload && systemctl enable beampi-usb.service >/dev/null 2>&1"
+  if [[ -n "$PASS" ]]; then
+    printf '%s\n' "$PASS" | "${SSH[@]}" "$PI_HOST" "sudo -S sh -c '$UNIT_CMD' 2>/dev/null"
+  else
+    "${SSH[@]}" "$PI_HOST" "sudo -n sh -c '$UNIT_CMD'" || {
+      echo "✗ Unit-Installation braucht das sudo-Passwort – .deploy-pass anlegen oder BEAMPI_SSH_PASS setzen."
+      exit 1
+    }
+  fi
+fi
+
 # --- 4) Neustart nur bei Server-Änderungen (public/, README etc. brauchen keinen) -----
 if awk '{print $2}' <<< "$CHANGES" | grep -qE '^(server\.js|src/|package(-lock)?\.json|deploy/)'; then
   echo "→ Server-Code geändert – starte beampi-Dienst neu …"

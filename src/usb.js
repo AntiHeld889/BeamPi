@@ -21,7 +21,8 @@ function clampInterval(seconds) {
 
 /** Natürliche Sortierung, damit 1,2,10 statt 1,10,2 herauskommt. */
 function naturalCompare(a, b) {
-  return a.localeCompare(b, 'de', { numeric: true, sensitivity: 'base' });
+  // Tie-Breaker über den Roh-Vergleich, damit z. B. 001.mp4/001.MP4 stabil bleibt
+  return a.localeCompare(b, 'de', { numeric: true, sensitivity: 'base' }) || (a < b ? -1 : a > b ? 1 : 0);
 }
 
 function isDir(p) {
@@ -67,29 +68,25 @@ function parseConfig(root) {
   } catch {
     return { interval_s: DEFAULT_INTERVAL_S, found: false };
   }
-  let minutes = 0;
-  let seconds = 0;
-  let sawValue = false;
+  // min/sek getrennt von der Einzahlangabe (wartezeit/intervall) einsammeln,
+  // damit die Reihenfolge der Zeilen egal ist und min/sek immer Vorrang hat.
+  let minutes = null;
+  let seconds = null;
+  let single = null;
   for (const line of raw.replace(/^﻿/, '').split(/\r?\n/)) {
     const m = line.trim().match(/^([a-zA-ZäöüÄÖÜ]+)\s*[:=]\s*(\d+)/);
     if (!m) continue;
     const key = m[1].toLowerCase();
     const value = Number(m[2]);
-    if (key.startsWith('min')) {
-      minutes = value;
-      sawValue = true;
-    } else if (key.startsWith('sek') || key.startsWith('sec')) {
-      seconds = value;
-      sawValue = true;
-    } else if (key.startsWith('wartezeit') || key.startsWith('intervall')) {
-      // Einzahlangabe in Sekunden ebenfalls erlauben
-      seconds = value;
-      minutes = 0;
-      sawValue = true;
-    }
+    if (key.startsWith('min')) minutes = value;
+    else if (key.startsWith('sek') || key.startsWith('sec')) seconds = value;
+    else if (key.startsWith('wartezeit') || key.startsWith('intervall')) single = value;
   }
-  if (!sawValue) return { interval_s: DEFAULT_INTERVAL_S, found: false };
-  return { interval_s: clampInterval(minutes * 60 + seconds), found: true };
+  if (minutes !== null || seconds !== null) {
+    return { interval_s: clampInterval((minutes ?? 0) * 60 + (seconds ?? 0)), found: true };
+  }
+  if (single !== null) return { interval_s: clampInterval(single), found: true };
+  return { interval_s: DEFAULT_INTERVAL_S, found: false };
 }
 
 /**
