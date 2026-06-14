@@ -23,6 +23,13 @@ for link in /dev/disk/by-id/usb-*-part*; do
   dev="$(readlink -f "$link")"
   [ -b "$dev" ] || continue
 
+  # Bereits eingehängte Geräte NICHT anfassen: das schließt eine USB-System-
+  # SSD (Root-Dateisystem) ebenso aus wie einen vom Desktop automatisch
+  # gemounteten Stick (den findet BeamPi dann unter /media/pi/<Name>).
+  if findmnt -n -S "$dev" >/dev/null 2>&1; then
+    continue
+  fi
+
   probe="$(mktemp -d)"
   if mount -o ro "$dev" "$probe" 2>/dev/null; then
     if [ -d "$probe/Videos" ]; then
