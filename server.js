@@ -11,6 +11,7 @@ import { MediaMeta } from './src/media.js';
 import { Auth, LoginThrottle, SESSION_MAX_AGE_S } from './src/auth.js';
 import { Player, VideoNotFoundError } from './src/player.js';
 import { GpioButton } from './src/gpio.js';
+import { detectUsbShow } from './src/usb.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 8080);
@@ -34,6 +35,12 @@ function resolveInVideoDir(relativePath) {
 
 let activePlaylist = null;
 let activeIndex = 0;
+
+// USB-Stick-Modus: Beim Start kann ein vorbereiteter USB-Stick die Bühne
+// übernehmen (Ordner "Videos" + beampi.txt). Die daraus erzeugte Playlist
+// lebt nur im Speicher und wird nicht nach data/playlists.json geschrieben.
+const USB_PLAYLIST_NAME = 'USB-Stick';
+let usbMode = false;
 
 const player = new Player({
   videoDir: settings.getVideoDirectory(),
@@ -110,7 +117,14 @@ function applyAutoTrigger() {
 }
 
 function savePlaylists() {
-  storage.savePlaylists(playlists);
+  // Die flüchtige USB-Playlist nie auf die Platte schreiben.
+  if (playlists.has(USB_PLAYLIST_NAME)) {
+    const persistent = new Map(playlists);
+    persistent.delete(USB_PLAYLIST_NAME);
+    storage.savePlaylists(persistent);
+  } else {
+    storage.savePlaylists(playlists);
+  }
 }
 
 function getActiveProgress() {
@@ -158,6 +172,49 @@ function startPlaylist(name) {
   }
   broadcastState();
   return { ok: true, warning };
+}
+
+/**
+ * Beim Start prüfen, ob ein vorbereiteter USB-Stick steckt, und ihn ggf.
+ * übernehmen lassen (Loop + Auto-Trigger über alle Videos).
+ * @returns {boolean} true, wenn der Stick die Wiedergabe übernommen hat
+ */
+function tryStartUsbShow() {
+  let show;
+  try {
+    show = detectUsbShow();
+  } catch (err) {
+    console.warn(`USB-Erkennung fehlgeschlagen: ${err.message}`);
+    return false;
+  }
+  if (!show) return false;
+
+  // Videoverzeichnis + Auto-Trigger zur Laufzeit auf den Stick umbiegen
+  settings.applyUsbOverrides({
+    videoDirectory: show.videosDir,
+    autoTriggerEnabled: true,
+    autoTriggerIntervalS: show.intervalS,
+  });
+  player.setVideoDirectory(show.videosDir);
+
+  // Flüchtige Playlist aus den Stick-Videos aufbauen und aktivieren
+  playlists.set(USB_PLAYLIST_NAME, {
+    name: USB_PLAYLIST_NAME,
+    loop_video: show.loopVideo,
+    videos: show.videos,
+  });
+  usbMode = true;
+  startPlaylist(USB_PLAYLIST_NAME);
+
+  const mins = Math.floor(show.intervalS / 60);
+  const secs = show.intervalS % 60;
+  console.log(
+    `USB-Stick erkannt (${show.root}): ${show.videos.length} Video(s), ` +
+      `Loop ${show.loopVideo ? `„${show.loopVideo}"` : 'schwarz'}, ` +
+      `Auto-Trigger alle ${mins} min ${secs} s` +
+      `${show.configFound ? '' : ' (beampi.txt fehlt – Standard 30 s)'}.`
+  );
+  return true;
 }
 
 /** @returns {{ok: boolean, error?: string}} */
@@ -210,6 +267,7 @@ function duplicatePlaylist(name, requestedName) {
     candidate = String(requestedName).trim();
     if (!candidate) throw new Error('Der neue Playlist-Name darf nicht leer sein.');
     if (candidate.includes('/')) throw new Error('Der Name darf keinen Schrägstrich enthalten.');
+    if (candidate === USB_PLAYLIST_NAME) throw new Error('Dieser Name ist für den USB-Stick-Modus reserviert.');
     if (playlists.has(candidate)) throw new Error('Eine Playlist mit diesem Namen existiert bereits.');
   } else {
     const base = `${original.name} Kopie`;
@@ -247,6 +305,7 @@ function stateSnapshot() {
     volume: settings.getVolume(),
     muted: settings.getMuted(),
     auto_trigger: autoTriggerSnapshot(),
+    usb_mode: usbMode,
     now: Date.now(), // für driftfreie Countdown-Anzeige im Client
   };
 }
@@ -466,6 +525,7 @@ app.post('/api/playlists', (req, res) => {
   const videos = Array.isArray(req.body?.videos) ? req.body.videos.map(String) : [];
   if (!name) return res.status(400).json({ status: 'error', message: 'Bitte einen Namen für die Playlist eingeben.' });
   if (name.includes('/')) return res.status(400).json({ status: 'error', message: 'Der Name darf keinen Schrägstrich enthalten.' });
+  if (name === USB_PLAYLIST_NAME) return res.status(409).json({ status: 'error', message: 'Dieser Name ist für den USB-Stick-Modus reserviert.' });
   if (playlists.has(name)) return res.status(409).json({ status: 'error', message: 'Eine Playlist mit diesem Namen existiert bereits.' });
   const invalid = validatePlaylistVideos(loopVideo, videos);
   if (invalid) return res.status(400).json({ status: 'error', message: invalid });
@@ -477,6 +537,9 @@ app.post('/api/playlists', (req, res) => {
 });
 
 app.put('/api/playlists/:name', (req, res) => {
+  if (req.params.name === USB_PLAYLIST_NAME) {
+    return res.status(409).json({ status: 'error', message: 'Die USB-Stick-Playlist kann nicht bearbeitet werden.' });
+  }
   const playlist = playlists.get(req.params.name);
   if (!playlist) return res.status(404).json({ status: 'error', message: 'Playlist wurde nicht gefunden.' });
   const loopVideo = req.body?.loop_video || null;
@@ -500,6 +563,9 @@ app.put('/api/playlists/:name', (req, res) => {
 });
 
 app.delete('/api/playlists/:name', (req, res) => {
+  if (req.params.name === USB_PLAYLIST_NAME) {
+    return res.status(409).json({ status: 'error', message: 'Die USB-Stick-Playlist kann nicht gelöscht werden.' });
+  }
   if (!deletePlaylist(req.params.name)) {
     return res.status(404).json({ status: 'error', message: 'Playlist wurde nicht gefunden.' });
   }
@@ -882,17 +948,21 @@ app.post('/api/upload', (req, res) => {
 // Start ------------------------------------------------------------------------------
 
 applyGpioSettings();
-applyAutoTrigger();
 
-const autoStart = settings.getAutoStartPlaylist();
-if (autoStart) {
-  if (!startPlaylist(autoStart).ok) {
-    console.warn(`Auto-Start-Playlist "${autoStart}" wurde nicht gefunden.`);
-    settings.setAutoStartPlaylist(null);
-  } else {
-    console.log(`Auto-Start: Playlist "${autoStart}" aktiviert.`);
+// Steckt ein vorbereiteter USB-Stick, übernimmt er die Wiedergabe. Sonst
+// greift der normale Auto-Start aus den gespeicherten Einstellungen.
+if (!tryStartUsbShow()) {
+  const autoStart = settings.getAutoStartPlaylist();
+  if (autoStart) {
+    if (!startPlaylist(autoStart).ok) {
+      console.warn(`Auto-Start-Playlist "${autoStart}" wurde nicht gefunden.`);
+      settings.setAutoStartPlaylist(null);
+    } else {
+      console.log(`Auto-Start: Playlist "${autoStart}" aktiviert.`);
+    }
   }
 }
+applyAutoTrigger();
 
 const server = app.listen(PORT, '0.0.0.0', () => {
   console.log(`BeamPi läuft auf http://0.0.0.0:${PORT}`);

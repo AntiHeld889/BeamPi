@@ -1,7 +1,7 @@
 [Unit]
 Description=BeamPi Beamer-Videoplayer
-After=network-online.target graphical.target
-Wants=network-online.target
+After=network-online.target graphical.target beampi-usb.service
+Wants=network-online.target beampi-usb.service
 
 [Service]
 Type=simple

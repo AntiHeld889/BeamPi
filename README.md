@@ -17,7 +17,43 @@ Playlist einmal abgespielt, danach geht es zurück zum Loop.
 - Video-Upload und Ordnerverwaltung direkt im Browser
 - Ausgehende Webhooks bei Trigger-Start und Trigger-Ende (POST JSON, GET-Fallback)
 - GPIO-Taster als Trigger: Taster zwischen konfigurierbarem BCM-Pin und GND (interner Pull-up, Entprellung; benötigt das Paket `gpiod`)
+- USB-Stick-Modus: vorbereiteten USB-Stick einstecken, Pi einschalten – läuft (ganz ohne Web-Oberfläche)
 - HTTP-API kompatibel zum Original
+
+## USB-Stick-Modus (ohne Technikkenntnisse)
+
+Für Leute, die weder Linux noch die Web-Oberfläche anfassen möchten: einen
+USB-Stick so vorbereiten und einstecken – beim Einschalten übernimmt der Stick
+automatisch die Wiedergabe.
+
+**So wird der Stick vorbereitet** (FAT32 oder exFAT formatiert):
+
+```
+USB-Stick/
+├─ Videos/
+│  ├─ 001.mp4        ← Videos in Abspielreihenfolge benennen
+│  ├─ 002.mp4
+│  ├─ 003.mp4
+│  └─ loop.mp4       ← optional: läuft in Dauerschleife zwischen den Videos
+└─ beampi.txt        ← Wartezeit für den Auto-Trigger
+```
+
+Inhalt von **`beampi.txt`** (legt fest, wie lange zwischen zwei Videos gewartet wird):
+
+```
+minuten=1
+sekunden=30
+```
+
+Beim Einschalten gilt dann: Der `loop.mp4` läuft in Dauerschleife (ohne
+`loop.mp4` bleibt der Hintergrund schwarz). Alle 1 min 30 s wird automatisch das
+nächste Video aus `Videos/` abgespielt – der Reihe nach, danach wieder von vorn.
+Fehlt `beampi.txt`, gilt eine Wartezeit von 30 Sekunden.
+
+Der Stick wird nur **beim Systemstart** berücksichtigt und nur **schreibgeschützt**
+gelesen (die Videos werden nicht verändert). Steckt kein Stick, läuft BeamPi ganz
+normal mit den gespeicherten Playlists. Zum Zurückwechseln: Stick abziehen und
+den Pi neu starten.
 
 ## Anmeldung
 
@@ -78,10 +114,14 @@ sudo apt install -y mpv
 sudo mkdir -p /opt/beampi && sudo chown pi:pi /opt/beampi
 # Projektdateien nach /opt/beampi kopieren, dann:
 cd /opt/beampi && npm install --omit=dev
-sudo cp deploy/beampi.service /etc/systemd/system/
+sudo cp deploy/beampi.service deploy/beampi-usb.service /etc/systemd/system/
 sudo systemctl daemon-reload
+sudo systemctl enable --now beampi-usb.service   # USB-Stick-Modus (mountet vor BeamPi)
 sudo systemctl enable --now beampi
 ```
+
+`beampi-usb.service` hängt einen vorbereiteten USB-Stick (siehe oben) vor dem
+Start schreibgeschützt nach `/media/beampi-usb` ein. Ohne Stick passiert nichts.
 
 Web-UI: `http://<pi-ip>:8080`
 

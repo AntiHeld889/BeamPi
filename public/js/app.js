@@ -113,6 +113,7 @@
     if (typeof snap.volume === 'number' && Date.now() - lastVolumeSentAt > 1200) S.volume = snap.volume;
     if (typeof snap.muted === 'boolean') S.muted = snap.muted;
     if (snap.auto_trigger) S.autoTrigger = snap.auto_trigger;
+    S.usbMode = Boolean(snap.usb_mode);
     // Uhren-Offset zum Server (Pi ohne RTC kann falsch gehen)
     if (typeof snap.now === 'number') S.clockOffset = snap.now - Date.now();
     updateLamp();
@@ -336,6 +337,9 @@
     progressSlot.innerHTML = '';
     const progress = buildProgress();
     if (progress) progressSlot.append(progress);
+
+    const usbBanner = $('#usb-banner');
+    if (usbBanner) usbBanner.hidden = !S.usbMode;
 
     $('#trigger-btn').disabled = !S.active;
     updateLive();
@@ -619,6 +623,17 @@
           el('h1', {}, 'Dashboard')
         ),
         el('a', { class: 'btn btn--primary', href: '#/playlist/new' }, '+ Neue Playlist')
+      )
+    );
+
+    // Hinweis, wenn ein USB-Stick die Wiedergabe übernommen hat
+    root.append(
+      el('div', { class: 'usb-banner', id: 'usb-banner', hidden: true },
+        el('span', { class: 'usb-banner-icon', 'aria-hidden': 'true' }, '🔌'),
+        el('div', {},
+          el('b', {}, 'USB-Stick-Modus aktiv'),
+          el('span', {}, ' – die Wiedergabe läuft vom angesteckten Stick. Playlists und Einstellungen sind hier wirkungslos. Stick abziehen und neu starten für den Normalbetrieb.')
+        )
       )
     );
 

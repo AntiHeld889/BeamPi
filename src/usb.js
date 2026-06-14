@@ -1,0 +1,144 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import { isVideoFile } from './videos.js';
+
+// Bevorzugter Mountpunkt unseres eigenen Mount-Dienstes (deploy/mount-usb.sh),
+// danach die typischen Desktop-Automount-Orte als Rückfall.
+const FIXED_MOUNT = '/media/beampi-usb';
+const AUTOMOUNT_PARENTS = ['/media/pi', '/media', '/mnt'];
+
+const CONFIG_FILE = 'beampi.txt';
+const VIDEOS_DIR = 'Videos';
+const LOOP_BASENAME = 'loop';
+const DEFAULT_INTERVAL_S = 30;
+const MAX_INTERVAL_S = 3660;
+
+/** Wie der Auto-Trigger-Dialog: 1 s bis 60 min 60 s. */
+function clampInterval(seconds) {
+  if (!Number.isFinite(seconds)) return DEFAULT_INTERVAL_S;
+  return Math.min(MAX_INTERVAL_S, Math.max(1, Math.round(seconds)));
+}
+
+/** Natürliche Sortierung, damit 1,2,10 statt 1,10,2 herauskommt. */
+function naturalCompare(a, b) {
+  return a.localeCompare(b, 'de', { numeric: true, sensitivity: 'base' });
+}
+
+function isDir(p) {
+  try {
+    return fs.statSync(p).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/** Mögliche Mount-Roots in Prioritätsreihenfolge, dedupliziert. */
+function candidateRoots() {
+  const roots = [];
+  const seen = new Set();
+  const add = (p) => {
+    if (p && !seen.has(p)) {
+      seen.add(p);
+      roots.push(p);
+    }
+  };
+  add(FIXED_MOUNT);
+  for (const parent of AUTOMOUNT_PARENTS) {
+    let entries;
+    try {
+      entries = fs.readdirSync(parent);
+    } catch {
+      continue;
+    }
+    for (const name of entries.sort(naturalCompare)) add(path.join(parent, name));
+  }
+  return roots;
+}
+
+/**
+ * beampi.txt parsen: Zeilen "minuten=1" und "sekunden=30" (auch ":" als
+ * Trenner, Groß/Klein egal, CRLF/BOM von Windows werden toleriert).
+ * @returns {{interval_s: number, found: boolean}}
+ */
+function parseConfig(root) {
+  let raw;
+  try {
+    raw = fs.readFileSync(path.join(root, CONFIG_FILE), 'utf8');
+  } catch {
+    return { interval_s: DEFAULT_INTERVAL_S, found: false };
+  }
+  let minutes = 0;
+  let seconds = 0;
+  let sawValue = false;
+  for (const line of raw.replace(/^﻿/, '').split(/\r?\n/)) {
+    const m = line.trim().match(/^([a-zA-ZäöüÄÖÜ]+)\s*[:=]\s*(\d+)/);
+    if (!m) continue;
+    const key = m[1].toLowerCase();
+    const value = Number(m[2]);
+    if (key.startsWith('min')) {
+      minutes = value;
+      sawValue = true;
+    } else if (key.startsWith('sek') || key.startsWith('sec')) {
+      seconds = value;
+      sawValue = true;
+    } else if (key.startsWith('wartezeit') || key.startsWith('intervall')) {
+      // Einzahlangabe in Sekunden ebenfalls erlauben
+      seconds = value;
+      minutes = 0;
+      sawValue = true;
+    }
+  }
+  if (!sawValue) return { interval_s: DEFAULT_INTERVAL_S, found: false };
+  return { interval_s: clampInterval(minutes * 60 + seconds), found: true };
+}
+
+/**
+ * Sucht einen vorbereiteten BeamPi-USB-Stick (Ordner "Videos" mit Videos darin)
+ * und liest dessen Konfiguration aus.
+ *
+ * @param {string[]} [roots] zu prüfende Mount-Roots (Standard: Auto-Erkennung)
+ * @returns {null | {
+ *   root: string, videosDir: string, loopVideo: string|null,
+ *   videos: string[], intervalS: number, configFound: boolean
+ * }}
+ */
+export function detectUsbShow(roots = candidateRoots()) {
+  for (const root of roots) {
+    const videosDir = path.join(root, VIDEOS_DIR);
+    if (!isDir(videosDir)) continue;
+
+    let entries;
+    try {
+      entries = fs.readdirSync(videosDir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+
+    let loopVideo = null;
+    const videos = [];
+    for (const entry of entries) {
+      if (!entry.isFile() || !isVideoFile(entry.name)) continue;
+      const stem = path.basename(entry.name, path.extname(entry.name)).toLowerCase();
+      if (stem === LOOP_BASENAME) {
+        loopVideo = entry.name; // relativer Name im Videos-Ordner
+      } else {
+        videos.push(entry.name);
+      }
+    }
+    videos.sort(naturalCompare);
+
+    // Ohne abspielbares Material ist der Stick uninteressant – weitersuchen.
+    if (videos.length === 0 && !loopVideo) continue;
+
+    const config = parseConfig(root);
+    return {
+      root,
+      videosDir,
+      loopVideo,
+      videos,
+      intervalS: config.interval_s,
+      configFound: config.found,
+    };
+  }
+  return null;
+}

@@ -27,6 +27,11 @@ const DEFAULTS = {
 };
 
 export class SettingsManager {
+  // Laufzeit-Overrides für den USB-Stick-Modus. Sie haben Vorrang vor den
+  // gespeicherten Werten, werden aber NICHT auf die Platte geschrieben –
+  // Stick abziehen + Neustart stellt den Normalbetrieb wieder her.
+  #overrides = {};
+
   constructor(storage) {
     this.storage = storage;
     const stored = storage.loadSettings();
@@ -34,6 +39,22 @@ export class SettingsManager {
     for (const key of Object.keys(DEFAULTS)) {
       if (typeof stored[key] === 'string') this.settings[key] = stored[key];
     }
+  }
+
+  /**
+   * USB-Stick-Modus aktivieren: Videoverzeichnis + Auto-Trigger zur Laufzeit
+   * überschreiben (nicht persistent).
+   */
+  applyUsbOverrides({ videoDirectory, autoTriggerEnabled, autoTriggerIntervalS }) {
+    this.#overrides = {
+      video_directory: path.resolve(videoDirectory),
+      auto_trigger_enabled: autoTriggerEnabled ? '1' : '0',
+      auto_trigger_interval_s: String(autoTriggerIntervalS),
+    };
+  }
+
+  hasUsbOverrides() {
+    return Object.keys(this.#overrides).length > 0;
   }
 
   save() {
@@ -87,6 +108,9 @@ export class SettingsManager {
   }
 
   getVideoDirectory() {
+    // Im USB-Modus direkt den (read-only) Stick-Pfad liefern – kein mkdir,
+    // der Ordner existiert bereits und die Karte ist schreibgeschützt.
+    if (this.#overrides.video_directory) return this.#overrides.video_directory;
     const resolved = path.resolve(expandHome(this.settings.video_directory));
     fs.mkdirSync(resolved, { recursive: true });
     return resolved;
@@ -153,6 +177,9 @@ export class SettingsManager {
   }
 
   getAutoTriggerEnabled() {
+    if (this.#overrides.auto_trigger_enabled !== undefined) {
+      return this.#overrides.auto_trigger_enabled === '1';
+    }
     return this.settings.auto_trigger_enabled === '1';
   }
 
@@ -165,7 +192,9 @@ export class SettingsManager {
   }
 
   getAutoTriggerIntervalS() {
-    const value = Number(this.settings.auto_trigger_interval_s);
+    const source =
+      this.#overrides.auto_trigger_interval_s ?? this.settings.auto_trigger_interval_s;
+    const value = Number(source);
     return Number.isInteger(value) && value >= 1 && value <= 3660 ? value : 300;
   }
 

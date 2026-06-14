@@ -1403,6 +1403,30 @@ body.unauthed .lamp { display: none; }
 .toast--error::before { background: var(--red); box-shadow: 0 0 8px var(--red); }
 .toast--info::before { background: var(--blue); box-shadow: 0 0 8px var(--blue); }
 
+/* USB-Stick-Modus-Banner --------------------------------------------- */
+
+.usb-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0 0 18px;
+  padding: 12px 16px;
+  border: 1px solid var(--amber);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--amber) 12%, transparent);
+  color: var(--text);
+  line-height: 1.4;
+}
+
+.usb-banner-icon {
+  font-size: 1.4rem;
+  flex: 0 0 auto;
+}
+
+.usb-banner b {
+  color: var(--amber);
+}
+
 /* Kleinkram ---------------------------------------------------------- */
 
 .muted { color: var(--text-dim); }

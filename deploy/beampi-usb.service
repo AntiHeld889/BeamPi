@@ -1,0 +1,15 @@
+[Unit]
+Description=BeamPi USB-Stick einhängen
+DefaultDependencies=no
+After=local-fs.target
+Before=beampi.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Sucht einen USB-Stick mit Ordner "Videos" und hängt ihn read-only nach
+# /media/beampi-usb. Schlägt nie fehl – ohne Stick startet BeamPi normal.
+ExecStart=/opt/beampi/deploy/mount-usb.sh
+
+[Install]
+WantedBy=multi-user.target
