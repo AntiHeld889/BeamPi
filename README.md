@@ -24,8 +24,18 @@ Playlist einmal abgespielt, danach geht es zurück zum Loop.
 Die Web-UI ist passwortgeschützt. Erstanmeldung: Benutzer `admin`,
 Passwort `beampi` – danach wird ein Passwortwechsel erzwungen. Die Sitzung
 bleibt 180 Tage gespeichert (Cookie). Passwort später ändern: Einstellungen →
-„Passwort ändern". Passwort vergessen: auf dem Pi `data/auth.json` löschen
-und den Dienst neu starten (setzt auf admin/beampi zurück).
+„Passwort ändern".
+
+**Passwort vergessen** – auf dem Pi im Projektverzeichnis (`/opt/beampi`):
+
+```bash
+npm run set-password -- "MeinNeuesGeheim"   # neues Passwort direkt setzen
+npm run reset-password                       # zurück auf admin/beampi (Zwangswechsel)
+```
+
+Beides beendet alle offenen Sitzungen und braucht keinen Server-Neustart.
+Alternativ schlicht `data/auth.json` löschen und den Dienst neu starten –
+das setzt ebenfalls auf admin/beampi zurück.
 
 **Ohne Anmeldung erreichbar** bleiben die Maschinen-Endpunkte für
 Trigger-Hardware: `/api/trigger` und `/webhook/<playlist>`.

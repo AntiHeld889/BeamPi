@@ -1,11 +1,13 @@
 {
   "name": "beampi",
-  "version": "1.12.1",
+  "version": "1.13.0",
   "description": "BeamPi – Beamer-Videoplayer mit Loop/Trigger-Playlists für den Raspberry Pi",
   "type": "module",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "set-password": "node tools/reset-password.mjs",
+    "reset-password": "node tools/reset-password.mjs --default"
   },
   "engines": {
     "node": ">=24"
