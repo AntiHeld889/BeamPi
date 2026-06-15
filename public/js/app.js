@@ -723,10 +723,10 @@
     // Hinweis, wenn ein USB-Stick die Wiedergabe übernommen hat
     root.append(
       el('div', { class: 'usb-banner', id: 'usb-banner', hidden: true },
-        el('span', { class: 'usb-banner-icon', 'aria-hidden': 'true' }, '🔌'),
+        el('img', { class: 'usb-banner-icon', src: '/icons/usb-mode.png', alt: '', 'aria-hidden': 'true' }),
         el('div', {},
           el('b', {}, 'USB-Stick-Modus aktiv'),
-          el('span', {}, ' – die Wiedergabe läuft vom angesteckten Stick. Playlists und Einstellungen sind hier wirkungslos. Stick abziehen und neu starten für den Normalbetrieb.')
+          el('span', {}, ' – die Wiedergabe läuft vom angesteckten Stick. Playlists und Einstellungen sind hier wirkungslos. Sobald du den Stick abziehst, kehrt BeamPi automatisch zum Normalbetrieb zurück – kein Neustart nötig.')
         )
       )
     );
