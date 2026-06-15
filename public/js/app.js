@@ -917,7 +917,6 @@
       class: 'input', id: 'pl-name', type: 'text',
       value: isEdit ? playlist.name : '',
       placeholder: 'z. B. Halloween Show',
-      ...(isEdit ? { readonly: 'readonly' } : {}),
     });
 
     const loopSelect = el('select', { class: 'input mono', id: 'pl-loop' });
@@ -940,7 +939,7 @@
           el('div', { class: 'field', style: 'margin:0' },
             el('label', { for: 'pl-name' }, 'Name'),
             nameInput,
-            isEdit ? el('div', { class: 'hint' }, 'Der Name kann nachträglich nicht geändert werden.') : null
+            isEdit ? el('div', { class: 'hint' }, 'Wird der Name geändert, ändern sich auch die Webhook-/Trigger-Adressen (…/webhook/<Name>).') : null
           ),
           el('div', { class: 'field', style: 'margin:0' },
             el('label', { for: 'pl-loop' }, 'Loop-Video'),
@@ -1292,7 +1291,17 @@
       }
       try {
         if (isEdit) {
-          const result = await api(`/api/playlists/${encodeURIComponent(editName)}`, {
+          // Wurde der Name geändert, zuerst umbenennen (verschiebt auch
+          // aktive Playlist + Auto-Start), danach Inhalt unter neuem Namen speichern.
+          let targetName = editName;
+          if (name !== editName) {
+            await api(`/api/playlists/${encodeURIComponent(editName)}/rename`, {
+              method: 'POST',
+              json: { name },
+            });
+            targetName = name;
+          }
+          const result = await api(`/api/playlists/${encodeURIComponent(targetName)}`, {
             method: 'PUT',
             json: { loop_video: loopVideo, videos: selected },
           });

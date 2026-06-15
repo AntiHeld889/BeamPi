@@ -379,6 +379,40 @@ function duplicatePlaylist(name, requestedName) {
   return copy;
 }
 
+/**
+ * Eine Playlist umbenennen und alle Referenzen mitführen (aktive Playlist,
+ * Auto-Start). Der Name ist der Schlüssel in Map/JSON.
+ */
+function renamePlaylist(name, requestedName) {
+  if (name === USB_PLAYLIST_NAME) {
+    throw new Error('Die USB-Stick-Playlist kann nicht umbenannt werden.');
+  }
+  const playlist = playlists.get(name);
+  if (!playlist) {
+    const err = new Error('Playlist wurde nicht gefunden.');
+    err.code = 'NOT_FOUND';
+    throw err;
+  }
+  const newName = String(requestedName ?? '').trim();
+  if (!newName) throw new Error('Der neue Playlist-Name darf nicht leer sein.');
+  if (newName === name) return playlist; // unverändert
+  if (newName.includes('/')) throw new Error('Der Name darf keinen Schrägstrich enthalten.');
+  if (newName === USB_PLAYLIST_NAME) throw new Error('Dieser Name ist für den USB-Stick-Modus reserviert.');
+  if (playlists.has(newName)) throw new Error('Eine Playlist mit diesem Namen existiert bereits.');
+
+  playlist.name = newName;
+  playlists.delete(name);
+  playlists.set(newName, playlist);
+
+  // Referenzen mitführen, damit nichts ins Leere zeigt
+  if (activePlaylist === name) activePlaylist = newName;
+  if (settings.getAutoStartPlaylist() === name) settings.setAutoStartPlaylist(newName);
+
+  savePlaylists();
+  broadcastState();
+  return playlist;
+}
+
 function validatePlaylistVideos(loopVideo, videos) {
   const known = new Set(library.list());
   if (loopVideo && !known.has(loopVideo)) {
@@ -676,6 +710,16 @@ app.post('/api/playlists/:name/duplicate', (req, res) => {
   const requestedName = req.body?.name ?? req.body?.new_name ?? null;
   try {
     const playlist = duplicatePlaylist(req.params.name, requestedName);
+    res.json({ status: 'ok', playlist });
+  } catch (err) {
+    const status = err.code === 'NOT_FOUND' ? 404 : 400;
+    res.status(status).json({ status: 'error', message: err.message });
+  }
+});
+
+app.post('/api/playlists/:name/rename', (req, res) => {
+  try {
+    const playlist = renamePlaylist(req.params.name, req.body?.name);
     res.json({ status: 'ok', playlist });
   } catch (err) {
     const status = err.code === 'NOT_FOUND' ? 404 : 400;
