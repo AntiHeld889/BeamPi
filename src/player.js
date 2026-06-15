@@ -38,12 +38,11 @@ export class Player extends EventEmitter {
   #requestId = 0;
   #pending = new Map();
 
-  constructor({ videoDir, getAudioDevice, getStartWebhookUrl, getEndWebhookUrl, getDrmMode, getVolume, getMuted }) {
+  constructor({ videoDir, getAudioDevice, getStartWebhookUrl, getEndWebhookUrl, getVolume, getMuted }) {
     super();
     this.videoDir = path.resolve(videoDir);
     fs.mkdirSync(this.videoDir, { recursive: true });
     this.getAudioDevice = getAudioDevice;
-    this.getDrmMode = getDrmMode ?? (() => '');
     this.getVolume = getVolume ?? (() => 100);
     this.getMuted = getMuted ?? (() => false);
     this.getStartWebhookUrl = getStartWebhookUrl;
@@ -262,11 +261,6 @@ export class Player extends EventEmitter {
     if (audioDevice && audioDevice !== 'auto') {
       args.push(`--audio-device=${audioDevice}`);
     }
-
-    // Ausgabe-Auflösung bei Direktausgabe ohne Desktop (DRM/KMS). Entlastet
-    // z. B. den Pi 4 an 4K-Displays massiv; unter Wayland/X11 ohne Wirkung.
-    const drmMode = this.getDrmMode();
-    if (drmMode) args.push(`--drm-mode=${drmMode}`);
 
     // Display-Umgebung bei jedem mpv-Start neu erkennen:
     //  1. Wayland-Socket vorhanden → Wayland-Fenster (labwc/wayfire)

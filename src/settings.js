@@ -19,7 +19,6 @@ const DEFAULTS = {
   auto_start_playlist: '',
   gpio_pin: '',
   gpio_debounce_ms: '250',
-  drm_mode: '',
   volume: '100',
   muted: '0',
   auto_trigger_enabled: '0',
@@ -196,16 +195,5 @@ export class SettingsManager {
       this.#overrides.auto_trigger_interval_s ?? this.settings.auto_trigger_interval_s;
     const value = Number(source);
     return Number.isInteger(value) && value >= 1 && value <= 3660 ? value : 300;
-  }
-
-  /** @param {string} mode z. B. '1920x1080' oder '' für automatisch */
-  setDrmMode(mode) {
-    this.settings.drm_mode = (mode || '').trim();
-    this.save();
-  }
-
-  getDrmMode() {
-    const value = this.settings.drm_mode.trim();
-    return /^\d{3,4}x\d{3,4}(@\d{1,3})?$/.test(value) ? value : '';
   }
 }

@@ -47,7 +47,6 @@ const player = new Player({
   getAudioDevice: () => settings.getAudioOutput(),
   getStartWebhookUrl: () => settings.getTriggerStartWebhook(),
   getEndWebhookUrl: () => settings.getTriggerEndWebhook(),
-  getDrmMode: () => settings.getDrmMode(),
   getVolume: () => settings.getVolume(),
   getMuted: () => settings.getMuted(),
 });
@@ -794,12 +793,6 @@ app.put('/api/settings', (req, res) => {
 
   // --- Erst ALLES validieren, dann anwenden – sonst bleiben bei einem
   // Fehler mittendrin halb übernommene Einstellungen zurück. ---------------
-  if (typeof body.drm_mode === 'string') {
-    const value = body.drm_mode.trim();
-    if (value !== '' && !/^\d{3,4}x\d{3,4}(@\d{1,3})?$/.test(value)) {
-      return res.status(400).json({ status: 'error', message: 'Ausgabe-Auflösung bitte als BREITExHÖHE angeben, z. B. 1920x1080.' });
-    }
-  }
   if (typeof body.auto_start_playlist === 'string') {
     const name = body.auto_start_playlist.trim();
     if (name === USB_PLAYLIST_NAME) {
@@ -824,7 +817,6 @@ app.put('/api/settings', (req, res) => {
 
   // --- Anwenden ------------------------------------------------------------
   const previousAudio = settings.getAudioOutput();
-  const previousDrmMode = settings.getDrmMode();
 
   // Im USB-Modus liegt das Videoverzeichnis fest auf dem Stick – ein Schreiben
   // würde den Player mitten in der laufenden Show vom Stick wegreißen.
@@ -855,7 +847,6 @@ app.put('/api/settings', (req, res) => {
     }
   }
 
-  if (typeof body.drm_mode === 'string') settings.setDrmMode(body.drm_mode.trim());
   if (typeof body.audio_output === 'string') settings.setAudioOutput(body.audio_output);
   if (typeof body.trigger_start_webhook_url === 'string') settings.setTriggerStartWebhook(body.trigger_start_webhook_url);
   if (typeof body.trigger_end_webhook_url === 'string') settings.setTriggerEndWebhook(body.trigger_end_webhook_url);
@@ -866,9 +857,6 @@ app.put('/api/settings', (req, res) => {
   if (settings.getAudioOutput() !== previousAudio) {
     player.restart();
     warnings.push('Audio-Gerät geändert – der Player wird neu gestartet.');
-  } else if (settings.getDrmMode() !== previousDrmMode) {
-    player.restart();
-    warnings.push('Ausgabe-Auflösung geändert – der Player wird neu gestartet.');
   }
   applyGpioSettings();
 
