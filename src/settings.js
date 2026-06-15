@@ -56,6 +56,11 @@ export class SettingsManager {
     return Object.keys(this.#overrides).length > 0;
   }
 
+  /** USB-Stick-Modus beenden: Laufzeit-Overrides verwerfen (Normalbetrieb). */
+  clearUsbOverrides() {
+    this.#overrides = {};
+  }
+
   save() {
     this.storage.saveSettings(this.settings);
   }

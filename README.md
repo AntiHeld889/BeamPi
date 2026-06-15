@@ -114,14 +114,21 @@ sudo apt install -y mpv
 sudo mkdir -p /opt/beampi && sudo chown pi:pi /opt/beampi
 # Projektdateien nach /opt/beampi kopieren, dann:
 cd /opt/beampi && npm install --omit=dev
-sudo cp deploy/beampi.service deploy/beampi-usb.service /etc/systemd/system/
+sudo cp deploy/beampi.service deploy/beampi-usb.service deploy/beampi-usb-umount.service /etc/systemd/system/
+sudo cp deploy/99-beampi-usb.rules /etc/udev/rules.d/   # USB-Hotplug
+sudo udevadm control --reload-rules
 sudo systemctl daemon-reload
-sudo systemctl enable --now beampi-usb.service   # USB-Stick-Modus (mountet vor BeamPi)
+sudo systemctl enable --now beampi-usb.service   # USB-Stick beim Boot mounten
 sudo systemctl enable --now beampi
 ```
 
-`beampi-usb.service` hängt einen vorbereiteten USB-Stick (siehe oben) vor dem
-Start schreibgeschützt nach `/media/beampi-usb` ein. Ohne Stick passiert nichts.
+`beampi-usb.service` hängt einen vorbereiteten USB-Stick (siehe oben)
+schreibgeschützt nach `/media/beampi-usb` ein. Ohne Stick passiert nichts.
+
+**USB-Hotplug:** Mit der udev-Regel `99-beampi-usb.rules` wird ein Stick auch
+**im laufenden Betrieb** automatisch eingehängt bzw. beim Abziehen wieder
+ausgehängt – BeamPi erkennt das (Poll-Watcher) und startet die USB-Show bzw.
+kehrt zum Normalbetrieb zurück, **ganz ohne Neustart**.
 
 Web-UI: `http://<pi-ip>:8080`
 

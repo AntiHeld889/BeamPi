@@ -1,0 +1,9 @@
+[Unit]
+Description=BeamPi USB-Stick aushängen (Hotplug-Entfernung)
+DefaultDependencies=no
+
+[Service]
+Type=oneshot
+# Hängt /media/beampi-usb aus, wenn der Stick weg ist. Wird von der udev-Regel
+# (99-beampi-usb.rules) beim Entfernen eines USB-Geräts gestartet.
+ExecStart=/opt/beampi/deploy/umount-usb.sh

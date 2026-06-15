@@ -180,16 +180,24 @@ function startPlaylist(name) {
  * übernehmen lassen (Loop + Auto-Trigger über alle Videos).
  * @returns {boolean} true, wenn der Stick die Wiedergabe übernommen hat
  */
-function tryStartUsbShow() {
-  let show;
+let lastUsbSignature = null;
+
+function detectUsbShowSafe() {
   try {
-    show = detectUsbShow();
+    return detectUsbShow();
   } catch (err) {
     console.warn(`USB-Erkennung fehlgeschlagen: ${err.message}`);
-    return false;
+    return null;
   }
-  if (!show) return false;
+}
 
+/** Inhaltskennung des Sticks – ändert sich, wenn ein anderer Stick steckt. */
+function usbSignature(show) {
+  return JSON.stringify({ d: show.videosDir, v: show.videos, l: show.loopVideo, i: show.intervalS });
+}
+
+/** USB-Show aktivieren: Videoverzeichnis + Auto-Trigger + flüchtige Playlist. */
+function startUsbShow(show) {
   // Videoverzeichnis + Auto-Trigger zur Laufzeit auf den Stick umbiegen.
   // Ohne Trigger-Videos (nur loop.mp4) läuft reiner Loop – kein Auto-Trigger,
   // sonst würde der Timer endlos ins Leere feuern.
@@ -207,6 +215,7 @@ function tryStartUsbShow() {
     videos: show.videos,
   });
   usbMode = true;
+  lastUsbSignature = usbSignature(show);
   startPlaylist(USB_PLAYLIST_NAME);
 
   const mins = Math.floor(show.intervalS / 60);
@@ -217,7 +226,53 @@ function tryStartUsbShow() {
       `Auto-Trigger alle ${mins} min ${secs} s` +
       `${show.configFound ? '' : ' (beampi.txt fehlt – Standard 30 s)'}.`
   );
+}
+
+/** USB-Show beenden und in den Normalbetrieb zurückkehren. */
+function stopUsbShow() {
+  playlists.delete(USB_PLAYLIST_NAME);
+  settings.clearUsbOverrides();
+  usbMode = false;
+  lastUsbSignature = null;
+  player.setVideoDirectory(settings.getVideoDirectory());
+
+  // Auf die normale Auto-Start-Playlist zurück, sonst in den Leerlauf.
+  const autoStart = settings.getAutoStartPlaylist();
+  if (autoStart && playlists.has(autoStart)) {
+    startPlaylist(autoStart);
+  } else {
+    activePlaylist = null;
+    activeIndex = 0;
+    player.setLoopVideo(null);
+  }
+  applyAutoTrigger();
+  broadcastState();
+  console.log('USB-Stick entfernt – zurück im Normalbetrieb.');
+}
+
+/** Beim Start: steckt ein vorbereiteter Stick, übernimmt er die Wiedergabe. */
+function tryStartUsbShow() {
+  const show = detectUsbShowSafe();
+  if (!show) return false;
+  startUsbShow(show);
   return true;
+}
+
+/**
+ * Hotplug-Watcher: erkennt zur Laufzeit, ob ein vorbereiteter USB-Stick
+ * dazugekommen, gewechselt oder entfernt wurde, und schaltet entsprechend um
+ * (kein Neustart nötig). Das eigentliche Mounten/Aushängen erledigt die
+ * udev-Regel (deploy/99-beampi-usb.rules) auf Root-Ebene.
+ */
+function reconcileUsb() {
+  const show = detectUsbShowSafe();
+  if (show) {
+    if (!usbMode || usbSignature(show) !== lastUsbSignature) {
+      startUsbShow(show); // neu eingesteckt bzw. anderer Stick/Inhalt
+    }
+  } else if (usbMode) {
+    stopUsbShow(); // Stick entfernt
+  }
 }
 
 /** @returns {{ok: boolean, error?: string}} */
@@ -977,12 +1032,17 @@ if (!tryStartUsbShow()) {
 }
 applyAutoTrigger();
 
+// USB-Hotplug: alle 3 s prüfen, ob ein vorbereiteter Stick dazugekommen,
+// gewechselt oder entfernt wurde – dann ohne Neustart umschalten.
+const usbWatchTimer = setInterval(reconcileUsb, 3000);
+
 const server = app.listen(PORT, '0.0.0.0', () => {
   console.log(`BeamPi läuft auf http://0.0.0.0:${PORT}`);
   console.log(`Videoverzeichnis: ${settings.getVideoDirectory()}`);
 });
 
 function shutdown() {
+  clearInterval(usbWatchTimer);
   gpio.stop();
   player.stop();
   server.close(() => process.exit(0));

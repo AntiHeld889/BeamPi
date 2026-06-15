@@ -66,10 +66,10 @@ if grep -q 'package.json' <<< "$CHANGES"; then
   "${SSH[@]}" "$PI_HOST" "cd $PI_PATH && npm install --omit=dev"
 fi
 
-# --- 3b) systemd-Units nach /etc/systemd/system spiegeln, falls geändert -------------
-if awk '{print $2}' <<< "$CHANGES" | grep -qE '^deploy/beampi(-usb)?\.service$'; then
-  echo "→ systemd-Units geändert – installiere und aktiviere auf dem Pi …"
-  UNIT_CMD="cp $PI_PATH/deploy/beampi.service $PI_PATH/deploy/beampi-usb.service /etc/systemd/system/ && systemctl daemon-reload && systemctl enable beampi-usb.service >/dev/null 2>&1"
+# --- 3b) systemd-Units + udev-Regel installieren, falls deploy/ geändert -------------
+if awk '{print $2}' <<< "$CHANGES" | grep -qE '^deploy/.*\.(service|rules|sh)$'; then
+  echo "→ Units/udev-Regel geändert – installiere und aktiviere auf dem Pi …"
+  UNIT_CMD="cp $PI_PATH/deploy/beampi.service $PI_PATH/deploy/beampi-usb.service $PI_PATH/deploy/beampi-usb-umount.service /etc/systemd/system/ && cp $PI_PATH/deploy/99-beampi-usb.rules /etc/udev/rules.d/ && chmod +x $PI_PATH/deploy/mount-usb.sh $PI_PATH/deploy/umount-usb.sh && systemctl daemon-reload && systemctl enable beampi-usb.service >/dev/null 2>&1 && udevadm control --reload-rules >/dev/null 2>&1"
   if [[ -n "$PASS" ]]; then
     printf '%s\n' "$PASS" | "${SSH[@]}" "$PI_HOST" "sudo -S sh -c '$UNIT_CMD' 2>/dev/null"
   else

@@ -1,0 +1,9 @@
+# BeamPi USB-Hotplug (Root-Ebene): Mounten beim Einstecken, Aushängen beim
+# Entfernen eines USB-Sticks. Das Umschalten der WIEDERGABE macht BeamPi selbst
+# über seinen Poll-Watcher (reconcileUsb) – hier geht es nur um den Mount.
+#
+# Greift für jede USB-Partition. Das ist unkritisch: mount-usb.sh überspringt
+# bereits eingehängte Geräte (z. B. die Boot-USB-SSD) und mountet nur einen
+# Stick mit Ordner "Videos".
+ACTION=="add", SUBSYSTEM=="block", ENV{ID_BUS}=="usb", ENV{DEVTYPE}=="partition", RUN+="/usr/bin/systemctl --no-block restart beampi-usb.service"
+ACTION=="remove", SUBSYSTEM=="block", ENV{ID_BUS}=="usb", ENV{DEVTYPE}=="partition", RUN+="/usr/bin/systemctl --no-block start beampi-usb-umount.service"
