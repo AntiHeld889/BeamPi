@@ -213,6 +213,10 @@
 
   function sendVolume(value) {
     clearTimeout(volumeSendTimer);
+    // Gezogenen Wert sofort lokal übernehmen, sonst setzt ein eingehender
+    // Status-Snapshot (häufig während eines Videos) den Regler auf den alten
+    // S.volume zurück → er "springt" zurück.
+    S.volume = Number(value);
     lastVolumeSentAt = Date.now();
     volumeSendTimer = setTimeout(async () => {
       try {
