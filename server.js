@@ -179,11 +179,7 @@ function startPlaylist(name) {
   return { ok: true, warning };
 }
 
-/**
- * Beim Start prüfen, ob ein vorbereiteter USB-Stick steckt, und ihn ggf.
- * übernehmen lassen (Loop + Auto-Trigger über alle Videos).
- * @returns {boolean} true, wenn der Stick die Wiedergabe übernommen hat
- */
+// Signatur des zuletzt erkannten USB-Sticks (erkennt Stick-Wechsel im Watcher)
 let lastUsbSignature = null;
 
 async function detectUsbShowSafe() {

@@ -16,7 +16,7 @@ function run(args) {
   });
 }
 
-/** Ermittelt den passenden ALSA-Simple-Control (einmal, gecacht). */
+/** Ermittelt den passenden ALSA-Simple-Control (gecacht). */
 function getControl() {
   if (!controlPromise) {
     controlPromise = (async () => {
@@ -29,10 +29,22 @@ function getControl() {
         if (hit) return hit;
       }
       return names[0];
-    })();
+    })().then((control) => {
+      // Cache NICHT auf null „einfrieren": beim Boot ist ALSA evtl. noch nicht
+      // bereit – dann beim nächsten Aufruf erneut erkennen.
+      if (!control) controlPromise = null;
+      return control;
+    });
   }
   return controlPromise;
 }
+
+// Aufrufe serialisieren + zusammenfassen: bei schnellem Slider-Ziehen läuft
+// immer nur EIN amixer-Prozess, und am Ende wird der zuletzt gewünschte Wert
+// gesetzt (sonst könnte ein älterer, langsamer amixer nach dem neuesten fertig
+// werden und eine falsche Endlautstärke hinterlassen).
+let applyChain = Promise.resolve();
+let targetPct = null;
 
 /**
  * Setzt die System-Lautstärke des Standard-Audiogeräts.
@@ -43,13 +55,21 @@ function getControl() {
  * @param {number} volume 0–100
  * @param {boolean} muted true → 0 %
  */
-export async function setSystemVolume(volume, muted) {
-  const control = await getControl();
-  if (!control) {
-    console.warn('Keine ALSA-Lautstärkeregelung gefunden (amixer) – Lautstärke nicht änderbar.');
-    return;
-  }
-  const pct = muted ? 0 : Math.max(0, Math.min(100, Math.round(volume)));
-  // -M: an die menschliche Wahrnehmung angepasste Skala (wie ein Desktop-Regler)
-  await run(['-M', '-q', 'sset', control, `${pct}%`]);
+export function setSystemVolume(volume, muted) {
+  targetPct = muted ? 0 : Math.max(0, Math.min(100, Math.round(volume)));
+  applyChain = applyChain
+    .then(async () => {
+      if (targetPct === null) return; // von einem späteren Aufruf bereits erledigt
+      const pct = targetPct;
+      targetPct = null;
+      const control = await getControl();
+      if (!control) {
+        console.warn('Keine ALSA-Lautstärkeregelung gefunden (amixer) – Lautstärke nicht änderbar.');
+        return;
+      }
+      // -M: an die menschliche Wahrnehmung angepasste Skala (wie ein Desktop-Regler)
+      await run(['-M', '-q', 'sset', control, `${pct}%`]);
+    })
+    .catch(() => {}); // Kette am Leben halten, falls ein Aufruf scheitert
+  return applyChain;
 }

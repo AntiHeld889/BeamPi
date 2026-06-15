@@ -130,7 +130,7 @@
     S.progress = snap.active_progress ?? null;
     // Eigene Lautstärke-Änderungen nicht von verspäteten Snapshots überschreiben
     if (typeof snap.volume === 'number' && Date.now() - lastVolumeSentAt > 1200) S.volume = snap.volume;
-    if (typeof snap.muted === 'boolean') S.muted = snap.muted;
+    if (typeof snap.muted === 'boolean' && Date.now() - lastVolumeSentAt > 1200) S.muted = snap.muted;
     if (snap.auto_trigger) S.autoTrigger = snap.auto_trigger;
     S.usbMode = Boolean(snap.usb_mode);
     // Uhren-Offset zum Server (Pi ohne RTC kann falsch gehen)
@@ -235,8 +235,10 @@
     clearTimeout(volumeSendTimer);
     // Gezogenen Wert sofort lokal übernehmen, sonst setzt ein eingehender
     // Status-Snapshot (häufig während eines Videos) den Regler auf den alten
-    // S.volume zurück → er "springt" zurück.
+    // S.volume zurück → er "springt" zurück. Ziehen hebt zudem die Stummschaltung
+    // auf – auch das sofort lokal, sonst flackert kurz „Stumm".
     S.volume = Number(value);
+    if (S.muted) S.muted = false;
     lastVolumeSentAt = Date.now();
     volumeSendTimer = setTimeout(async () => {
       try {
@@ -989,7 +991,7 @@
     });
     // Ordner-Filter: schränkt die Bibliothek auf einen Unterordner (rekursiv) ein.
     // Hierarchisch sortiert + eingerückt → Baum-Optik im Dropdown.
-    const libFolders = [...(videoData.folders ?? [])].sort(compareFolderPaths);
+    let libFolders = [...(videoData.folders ?? [])].sort(compareFolderPaths);
     const folderFilter = el('select', { class: 'input mono', onchange: () => renderTree() },
       el('option', { value: '' }, '(Alle Ordner)'),
       el('option', { value: '.' }, 'Hauptverzeichnis'), // nur Videos im Stammordner
@@ -1013,7 +1015,7 @@
         )
       ),
       el('div', { class: 'panel-body' },
-        libFolders.length ? el('div', { style: 'margin-bottom:10px' }, folderFilter) : null,
+        el('div', { id: 'lib-folder-row', class: libFolders.length ? '' : 'hidden', style: 'margin-bottom:10px' }, folderFilter),
         el('div', { class: 'search-wrap', style: 'max-width:none;margin-bottom:12px' }, searchInput),
         treeContainer
       )
@@ -1167,7 +1169,22 @@
       if (renameMap) selected = selected.map((p) => renameMap.get(p) ?? p);
       libSub.textContent = libSubText();
       rebuildLoopOptions(renameMap ? renameMap.get(loopSelect.value) ?? loopSelect.value : undefined);
+      rebuildFolderFilter(); // Ordnerliste kann sich geändert haben (z. B. neuer Ordner)
       renderSelected(); // rendert auch den Baum neu
+    }
+
+    // Ordner-Filter-Dropdown an die (evtl. geänderte) Ordnerliste anpassen
+    function rebuildFolderFilter() {
+      libFolders = [...(videoData.folders ?? [])].sort(compareFolderPaths);
+      const current = folderFilter.value;
+      folderFilter.innerHTML = '';
+      folderFilter.append(el('option', { value: '' }, '(Alle Ordner)'));
+      folderFilter.append(el('option', { value: '.' }, 'Hauptverzeichnis'));
+      for (const f of libFolders) folderFilter.append(el('option', { value: f }, indentFolderLabel(f)));
+      // bisherige Auswahl behalten, falls noch vorhanden – sonst auf „Alle Ordner"
+      folderFilter.value = current === '' || current === '.' || libFolders.includes(current) ? current : '';
+      const row = $('#lib-folder-row');
+      if (row) row.classList.toggle('hidden', libFolders.length === 0);
     }
 
     async function deleteFile(videoPath) {
@@ -1328,21 +1345,21 @@
       }
       try {
         if (isEdit) {
-          // Wurde der Name geändert, zuerst umbenennen (verschiebt auch
-          // aktive Playlist + Auto-Start), danach Inhalt unter neuem Namen speichern.
-          let targetName = editName;
+          // Erst den Inhalt unter dem AKTUELLEN Namen speichern, DANN ggf.
+          // umbenennen. So bleibt editName in jedem Fehlerfall gültig: scheitert
+          // das Umbenennen, ist der Inhalt trotzdem gespeichert und der Editor
+          // steckt nicht unter einem nicht mehr existierenden Namen fest.
+          const result = await api(`/api/playlists/${encodeURIComponent(editName)}`, {
+            method: 'PUT',
+            json: { loop_video: loopVideo, videos: selected },
+          });
+          if (result?.warning) toast(result.warning, 'error');
           if (name !== editName) {
             await api(`/api/playlists/${encodeURIComponent(editName)}/rename`, {
               method: 'POST',
               json: { name },
             });
-            targetName = name;
           }
-          const result = await api(`/api/playlists/${encodeURIComponent(targetName)}`, {
-            method: 'PUT',
-            json: { loop_video: loopVideo, videos: selected },
-          });
-          if (result?.warning) toast(result.warning, 'error');
           toast('Playlist aktualisiert.');
         } else {
           await api('/api/playlists', { json: { name, loop_video: loopVideo, videos: selected } });

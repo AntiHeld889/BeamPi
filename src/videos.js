@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-export const VIDEO_EXTENSIONS = new Set([
+const VIDEO_EXTENSIONS = new Set([
   '.mp4', '.mkv', '.mov', '.avi', '.mpg', '.mpeg', '.webm', '.m4v', '.wmv',
 ]);
 
@@ -13,7 +13,7 @@ export function isVideoFile(name) {
  * Liefert alle Videodateien unterhalb von `dir` als sortierte Einträge
  * mit POSIX-relativem Pfad, Größe und Änderungszeit.
  */
-export function scanVideos(dir) {
+function scanVideos(dir) {
   const base = path.resolve(dir);
   if (!fs.existsSync(base)) return [];
   let entries;
@@ -43,7 +43,7 @@ export function scanVideos(dir) {
  * Liefert alle Unterordner (relativ, POSIX) unterhalb von `dir` – auch LEERE,
  * die noch keine Videos enthalten. Sortiert.
  */
-export function scanFolders(dir) {
+function scanFolders(dir) {
   const base = path.resolve(dir);
   if (!fs.existsSync(base)) return [];
   let entries;
@@ -67,7 +67,7 @@ export function scanFolders(dir) {
  * Baut aus relativen Pfaden einen Baum:
  * [{ name, path, is_file, children: [...] }], Ordner vor Dateien.
  */
-export function buildVideoTree(relativePaths) {
+function buildVideoTree(relativePaths) {
   const root = { dirs: new Map(), files: [] };
 
   for (const relative of relativePaths) {

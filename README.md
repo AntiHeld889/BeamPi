@@ -9,13 +9,14 @@ Playlist einmal abgespielt, danach geht es zurück zum Loop.
 
 ## Funktionen
 
-- Playlists mit Loop-Video und geordneter Trigger-Videoliste (erstellen, bearbeiten, duplizieren, löschen, starten)
-- Playlist-Editor mit Video-Bibliothek (Ordnerbaum), Suche, Browser-Vorschau und Drag-&-Drop-Sortierung
+- Playlists mit Loop-Video und geordneter Trigger-Videoliste (erstellen, bearbeiten, umbenennen, duplizieren, löschen, starten)
+- Playlist-Editor mit Video-Bibliothek (Ordnerbaum, Ordner-Filter inkl. „Hauptverzeichnis"), Suche, Browser-Vorschau und Drag-&-Drop-Sortierung
 - Live-Status (Standby / Loop / On Air) per Server-Sent-Events
 - Live-Vorschau im Dashboard: zeigt positionssynchron, was der Beamer gerade ausgibt – mit Fortschritts-Laufband und Restzeit-Anzeige des laufenden Videos
-- Einstellungen: mpv-Audio-Device, Videoverzeichnis, Auto-Start-Playlist
-- Video-Upload und Ordnerverwaltung direkt im Browser
-- Ausgehende Webhooks bei Trigger-Start und Trigger-Ende (POST JSON, GET-Fallback)
+- Lautstärkeregler steuert die komplette System-Lautstärke (ALSA/`amixer`, z. B. HDMI-Ausgang), nicht nur mpv
+- Einstellungen: Audio-Ausgabegerät, Videoverzeichnis, Auto-Start-Playlist
+- Video-Upload mit wählbarem Zielordner und „Neuen Ordner anlegen" direkt im Browser (auch verschachtelte Unterordner)
+- Ausgehende Webhooks bei Trigger-Start und Trigger-Ende (sendet JSON per POST; schlägt das fehl, wird ersatzweise ein GET-Aufruf versucht)
 - GPIO-Taster als Trigger: Taster zwischen konfigurierbarem BCM-Pin und GND (interner Pull-up, Entprellung; benötigt das Paket `gpiod`)
 - USB-Stick-Modus mit Hotplug: vorbereiteten USB-Stick einstecken – auch im laufenden Betrieb, ganz ohne Web-Oberfläche und ohne Neustart
 - Trigger-Schutz: solange ein getriggertes Video läuft, werden weitere Trigger (Web, GPIO, Webhook, Auto-Trigger) ignoriert – erst nach Videoende geht es weiter
@@ -92,6 +93,7 @@ Trigger-Hardware: `/api/trigger` und `/webhook/<playlist>`.
 | POST | `/api/playlists` | Playlist anlegen `{name, loop_video, videos}` |
 | PUT | `/api/playlists/<name>` | Playlist ändern |
 | DELETE | `/api/playlists/<name>` | Playlist löschen |
+| POST | `/api/playlists/<name>/rename` | Playlist umbenennen `{name}` – aktive/Auto-Start-Referenzen ziehen mit |
 | POST | `/api/playlists/<name>/duplicate` | Playlist duplizieren (optional `{name}`) |
 | POST | `/api/playlists/<name>/start` | Playlist aktivieren |
 | GET | `/api/videos` | Video-Bibliothek (Liste, Baum, Größen/Dauern, freier Speicher) |
@@ -126,6 +128,8 @@ sudo systemctl enable --now beampi
 
 `beampi-usb.service` hängt einen vorbereiteten USB-Stick (siehe oben)
 schreibgeschützt nach `/media/beampi-usb` ein. Ohne Stick passiert nichts.
+Die Mount-Skripte (`mount-usb.sh`/`umount-usb.sh`) werden direkt aus
+`/opt/beampi/deploy/` ausgeführt – sie müssen nicht extra kopiert werden.
 
 **USB-Hotplug:** Mit der udev-Regel `99-beampi-usb.rules` wird ein Stick auch
 **im laufenden Betrieb** automatisch eingehängt bzw. beim Abziehen wieder
