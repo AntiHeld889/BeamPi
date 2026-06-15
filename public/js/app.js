@@ -1520,44 +1520,53 @@
     );
 
     // Ordner + Upload
-    const folderInput = el('input', { class: 'input mono', type: 'text', placeholder: 'z. B. veranstaltungen/2026' });
-    const subdirSelect = el('select', { class: 'input mono' },
-      el('option', { value: '' }, '(Hauptverzeichnis)'),
-      ...uploadFolders.map((f) => el('option', { value: f }, f))
-    );
+    const folderInput = el('input', { class: 'input mono', type: 'text', placeholder: 'z. B. 2026' });
+    // Übergeordneter Ordner (für neuen Unterordner) + Zielordner (für Upload)
+    const parentSelect = el('select', { class: 'input mono' });
+    const subdirSelect = el('select', { class: 'input mono' });
     const fileInput = el('input', { class: 'input', type: 'file', accept: 'video/*,.mkv,.avi,.wmv,.m4v,.mpg,.mpeg', multiple: 'multiple' });
     const progressBar = el('div', { class: 'bar' });
     const progressWrap = el('div', { class: 'upload-progress hidden' }, progressBar);
     const uploadBtn = el('button', { class: 'btn btn--primary', onclick: doUpload }, 'Videos hochladen');
 
-    // Dropdown der Zielordner neu aufbauen (z. B. nach dem Anlegen eines Ordners)
-    async function refreshSubdirOptions(selectPath) {
+    /** Ein Ordner-Dropdown neu befüllen ("(Hauptverzeichnis)" + alle Ordner). */
+    function fillFolderSelect(selectEl, folders, selected) {
+      selectEl.innerHTML = '';
+      selectEl.append(el('option', { value: '' }, '(Hauptverzeichnis)'));
+      for (const f of folders) selectEl.append(el('option', { value: f }, f));
+      if (selected && [...selectEl.options].some((o) => o.value === selected)) {
+        selectEl.value = selected;
+      }
+    }
+    fillFolderSelect(parentSelect, uploadFolders);
+    fillFolderSelect(subdirSelect, uploadFolders);
+
+    /** Beide Ordner-Dropdowns neu laden (z. B. nach dem Anlegen eines Ordners). */
+    async function refreshFolders(selectUploadPath) {
       let folders;
       try {
         folders = (await api('/api/videos')).folders ?? [];
       } catch {
         return; // Liste nicht verfügbar – aktuelle Optionen behalten
       }
-      const current = selectPath ?? subdirSelect.value;
-      subdirSelect.innerHTML = '';
-      subdirSelect.append(el('option', { value: '' }, '(Hauptverzeichnis)'));
-      for (const f of folders) subdirSelect.append(el('option', { value: f }, f));
-      if (current && [...subdirSelect.options].some((o) => o.value === current)) {
-        subdirSelect.value = current; // neuen/zuletzt gewählten Ordner vorauswählen
-      }
+      fillFolderSelect(parentSelect, folders, parentSelect.value);
+      fillFolderSelect(subdirSelect, folders, selectUploadPath ?? subdirSelect.value);
     }
 
     async function createFolder() {
-      const value = folderInput.value.trim();
-      if (!value) {
+      const name = folderInput.value.trim();
+      if (!name) {
         toast('Bitte einen Ordnernamen angeben.', 'error');
         return;
       }
+      // Neuen Ordner im gewählten übergeordneten Ordner anlegen (oder im Hauptverzeichnis)
+      const parent = parentSelect.value;
+      const fullPath = parent ? `${parent}/${name}` : name;
       try {
-        await api('/api/folders', { json: { path: value } });
+        await api('/api/folders', { json: { path: fullPath } });
         toast('Ordner wurde erstellt.');
         folderInput.value = '';
-        await refreshSubdirOptions(value); // neuen Ordner ins Upload-Dropdown übernehmen
+        await refreshFolders(fullPath); // neuen Ordner ins Upload-Dropdown übernehmen
       } catch (err) {
         toast(err.message, 'error');
       }
@@ -1613,7 +1622,11 @@
           el('p', { class: 'hint', style: 'margin:0 0 14px;color:var(--text-faint);font-size:13px' },
             `Unterordner innerhalb von ${data.video_directory}`),
           el('div', { class: 'field' },
-            el('label', {}, 'Ordnerpfad (relativ)'),
+            el('label', {}, 'Übergeordneter Ordner'),
+            parentSelect
+          ),
+          el('div', { class: 'field' },
+            el('label', {}, 'Ordnername'),
             folderInput
           ),
           el('button', { class: 'btn', onclick: createFolder }, 'Ordner erstellen')
