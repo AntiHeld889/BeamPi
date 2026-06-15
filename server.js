@@ -12,6 +12,7 @@ import { Auth, LoginThrottle, SESSION_MAX_AGE_S } from './src/auth.js';
 import { Player, VideoNotFoundError } from './src/player.js';
 import { GpioButton } from './src/gpio.js';
 import { detectUsbShow } from './src/usb.js';
+import { setSystemVolume } from './src/audio.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 8080);
@@ -47,9 +48,12 @@ const player = new Player({
   getAudioDevice: () => settings.getAudioOutput(),
   getStartWebhookUrl: () => settings.getTriggerStartWebhook(),
   getEndWebhookUrl: () => settings.getTriggerEndWebhook(),
-  getVolume: () => settings.getVolume(),
-  getMuted: () => settings.getMuted(),
 });
+
+/** Gespeicherte Lautstärke/Mute auf den System-Mixer (ALSA) anwenden. */
+function applySystemVolume() {
+  setSystemVolume(settings.getVolume(), settings.getMuted());
+}
 
 // GPIO-Taster: ein Druck wirkt wie der Trigger-Button im Dashboard
 const gpio = new GpioButton();
@@ -574,12 +578,12 @@ app.put('/api/volume', (req, res) => {
       return res.status(400).json({ status: 'error', message: 'Lautstärke muss zwischen 0 und 100 liegen.' });
     }
     settings.setVolume(volume);
-    player.setVolume(settings.getVolume());
   }
   if (body.muted !== undefined) {
     settings.setMuted(Boolean(body.muted));
-    player.setMuted(settings.getMuted());
   }
+  // Regler steuert die komplette System-(ALSA-)Lautstärke, nicht nur mpv.
+  applySystemVolume();
   broadcastState();
   res.json({ status: 'ok', volume: settings.getVolume(), muted: settings.getMuted() });
 });
@@ -1040,6 +1044,7 @@ app.post('/api/upload', (req, res) => {
 // Start ------------------------------------------------------------------------------
 
 applyGpioSettings();
+applySystemVolume(); // gespeicherte Lautstärke auf den System-Mixer anwenden
 
 // Steckt ein vorbereiteter USB-Stick, übernimmt er die Wiedergabe. Sonst
 // greift der normale Auto-Start aus den gespeicherten Einstellungen.
