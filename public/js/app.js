@@ -13,8 +13,7 @@
       else if (key === 'dataset') Object.assign(node.dataset, value);
       else if (key.startsWith('on') && typeof value === 'function') {
         node.addEventListener(key.slice(2), value);
-      } else if (key === 'html') node.innerHTML = value;
-      else if (value !== undefined && value !== null) node.setAttribute(key, value);
+      } else if (value !== undefined && value !== null) node.setAttribute(key, value);
     }
     for (const child of children.flat()) {
       if (child === null || child === undefined || child === false) continue;
@@ -825,7 +824,7 @@
       )
     );
 
-    const grid = el('div', { class: 'playlist-grid', id: 'pl-grid' });
+    const grid = el('div', { class: 'playlist-grid' });
     root.append(grid);
 
     function renderPlaylistGrid() {

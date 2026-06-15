@@ -182,13 +182,33 @@ function startPlaylist(name) {
  */
 let lastUsbSignature = null;
 
-function detectUsbShowSafe() {
+async function detectUsbShowSafe() {
   try {
-    return detectUsbShow();
+    return await detectUsbShow();
   } catch (err) {
     console.warn(`USB-Erkennung fehlgeschlagen: ${err.message}`);
     return null;
   }
+}
+
+/**
+ * Stellt den Normalbetrieb her: Auto-Start-Playlist starten, sonst Leerlauf.
+ * Bereinigt eine tote Auto-Start-Referenz. Wird beim Boot UND beim Beenden des
+ * USB-Modus genutzt, damit beide Pfade denselben Zustand herstellen.
+ */
+function applyAutoStartPlaylist() {
+  const autoStart = settings.getAutoStartPlaylist();
+  if (autoStart && startPlaylist(autoStart).ok) {
+    console.log(`Auto-Start: Playlist "${autoStart}" aktiviert.`);
+    return;
+  }
+  if (autoStart) {
+    console.warn(`Auto-Start-Playlist "${autoStart}" wurde nicht gefunden.`);
+    settings.setAutoStartPlaylist(null);
+  }
+  activePlaylist = null;
+  activeIndex = 0;
+  player.setLoopVideo(null);
 }
 
 /** Inhaltskennung des Sticks – ändert sich, wenn ein anderer Stick steckt. */
@@ -234,25 +254,18 @@ function stopUsbShow() {
   settings.clearUsbOverrides();
   usbMode = false;
   lastUsbSignature = null;
+  // setVideoDirectory bricht einen evtl. noch laufenden Stick-Trigger ab und
+  // löst den Player vom (ausgehängten) Stick-Verzeichnis – danach Normalbetrieb.
   player.setVideoDirectory(settings.getVideoDirectory());
-
-  // Auf die normale Auto-Start-Playlist zurück, sonst in den Leerlauf.
-  const autoStart = settings.getAutoStartPlaylist();
-  if (autoStart && playlists.has(autoStart)) {
-    startPlaylist(autoStart);
-  } else {
-    activePlaylist = null;
-    activeIndex = 0;
-    player.setLoopVideo(null);
-  }
+  applyAutoStartPlaylist();
   applyAutoTrigger();
   broadcastState();
   console.log('USB-Stick entfernt – zurück im Normalbetrieb.');
 }
 
 /** Beim Start: steckt ein vorbereiteter Stick, übernimmt er die Wiedergabe. */
-function tryStartUsbShow() {
-  const show = detectUsbShowSafe();
+async function tryStartUsbShow() {
+  const show = await detectUsbShowSafe();
   if (!show) return false;
   startUsbShow(show);
   return true;
@@ -263,15 +276,26 @@ function tryStartUsbShow() {
  * dazugekommen, gewechselt oder entfernt wurde, und schaltet entsprechend um
  * (kein Neustart nötig). Das eigentliche Mounten/Aushängen erledigt die
  * udev-Regel (deploy/99-beampi-usb.rules) auf Root-Ebene.
+ *
+ * Re-entrancy-Schutz: läuft eine (async) Erkennung noch – etwa weil ein
+ * langsamer Mount sie aufhält –, überspringt der nächste Tick, statt sich zu
+ * stapeln.
  */
-function reconcileUsb() {
-  const show = detectUsbShowSafe();
-  if (show) {
-    if (!usbMode || usbSignature(show) !== lastUsbSignature) {
-      startUsbShow(show); // neu eingesteckt bzw. anderer Stick/Inhalt
+let usbReconciling = false;
+async function reconcileUsb() {
+  if (usbReconciling) return;
+  usbReconciling = true;
+  try {
+    const show = await detectUsbShowSafe();
+    if (show) {
+      if (!usbMode || usbSignature(show) !== lastUsbSignature) {
+        startUsbShow(show); // neu eingesteckt bzw. anderer Stick/Inhalt
+      }
+    } else if (usbMode) {
+      stopUsbShow(); // Stick entfernt
     }
-  } else if (usbMode) {
-    stopUsbShow(); // Stick entfernt
+  } finally {
+    usbReconciling = false;
   }
 }
 
@@ -1019,16 +1043,8 @@ applyGpioSettings();
 
 // Steckt ein vorbereiteter USB-Stick, übernimmt er die Wiedergabe. Sonst
 // greift der normale Auto-Start aus den gespeicherten Einstellungen.
-if (!tryStartUsbShow()) {
-  const autoStart = settings.getAutoStartPlaylist();
-  if (autoStart) {
-    if (!startPlaylist(autoStart).ok) {
-      console.warn(`Auto-Start-Playlist "${autoStart}" wurde nicht gefunden.`);
-      settings.setAutoStartPlaylist(null);
-    } else {
-      console.log(`Auto-Start: Playlist "${autoStart}" aktiviert.`);
-    }
-  }
+if (!(await tryStartUsbShow())) {
+  applyAutoStartPlaylist();
 }
 applyAutoTrigger();
 

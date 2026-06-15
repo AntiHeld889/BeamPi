@@ -10,7 +10,7 @@ const CONNECT_TIMEOUT_MS = 6000;
 const RESTART_DELAY_MS = 2000;
 
 export class VideoNotFoundError extends Error {}
-export class InvalidVideoPathError extends Error {}
+class InvalidVideoPathError extends Error {}
 
 /**
  * Steuert mpv im Hintergrund über dessen JSON-IPC-Socket.
@@ -57,6 +57,13 @@ export class Player extends EventEmitter {
     fs.mkdirSync(this.videoDir, { recursive: true });
     this.#queue = [];
     this.#loopVideo = null;
+    // Einen evtl. noch laufenden Trigger (z. B. vom gerade abgezogenen USB-Stick)
+    // hart abbrechen und mpv vom alten Verzeichnis lösen – sonst blockiert der
+    // #playingTrigger-Zustand #syncPlayback und das Bild bliebe eingefroren.
+    this.#playingTrigger = false;
+    this.#currentVideo = null;
+    this.#currentIsLoop = false;
+    this.#command(['stop']);
     this.#syncPlayback();
     this.#emitStatus();
   }

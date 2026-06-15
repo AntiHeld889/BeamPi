@@ -12,19 +12,20 @@ Playlist einmal abgespielt, danach geht es zurück zum Loop.
 - Playlists mit Loop-Video und geordneter Trigger-Videoliste (erstellen, bearbeiten, duplizieren, löschen, starten)
 - Playlist-Editor mit Video-Bibliothek (Ordnerbaum), Suche, Browser-Vorschau und Drag-&-Drop-Sortierung
 - Live-Status (Standby / Loop / On Air) per Server-Sent-Events
-- Live-Vorschau im Dashboard: zeigt positionssynchron, was der Beamer gerade ausgibt
+- Live-Vorschau im Dashboard: zeigt positionssynchron, was der Beamer gerade ausgibt – mit Fortschritts-Laufband und Restzeit-Anzeige des laufenden Videos
 - Einstellungen: mpv-Audio-Device, Videoverzeichnis, Auto-Start-Playlist
 - Video-Upload und Ordnerverwaltung direkt im Browser
 - Ausgehende Webhooks bei Trigger-Start und Trigger-Ende (POST JSON, GET-Fallback)
 - GPIO-Taster als Trigger: Taster zwischen konfigurierbarem BCM-Pin und GND (interner Pull-up, Entprellung; benötigt das Paket `gpiod`)
-- USB-Stick-Modus: vorbereiteten USB-Stick einstecken, Pi einschalten – läuft (ganz ohne Web-Oberfläche)
+- USB-Stick-Modus mit Hotplug: vorbereiteten USB-Stick einstecken – auch im laufenden Betrieb, ganz ohne Web-Oberfläche und ohne Neustart
+- Trigger-Schutz: solange ein getriggertes Video läuft, werden weitere Trigger (Web, GPIO, Webhook, Auto-Trigger) ignoriert – erst nach Videoende geht es weiter
 - HTTP-API kompatibel zum Original
 
 ## USB-Stick-Modus (ohne Technikkenntnisse)
 
 Für Leute, die weder Linux noch die Web-Oberfläche anfassen möchten: einen
-USB-Stick so vorbereiten und einstecken – beim Einschalten übernimmt der Stick
-automatisch die Wiedergabe.
+USB-Stick so vorbereiten und einstecken – der Stick übernimmt dann automatisch
+die Wiedergabe, egal ob beim Einschalten oder im laufenden Betrieb.
 
 **So wird der Stick vorbereitet** (FAT32 oder exFAT formatiert):
 
@@ -45,15 +46,16 @@ minuten=1
 sekunden=30
 ```
 
-Beim Einschalten gilt dann: Der `loop.mp4` läuft in Dauerschleife (ohne
+Sobald der Stick steckt, gilt: Der `loop.mp4` läuft in Dauerschleife (ohne
 `loop.mp4` bleibt der Hintergrund schwarz). Alle 1 min 30 s wird automatisch das
 nächste Video aus `Videos/` abgespielt – der Reihe nach, danach wieder von vorn.
 Fehlt `beampi.txt`, gilt eine Wartezeit von 30 Sekunden.
 
-Der Stick wird nur **beim Systemstart** berücksichtigt und nur **schreibgeschützt**
-gelesen (die Videos werden nicht verändert). Steckt kein Stick, läuft BeamPi ganz
-normal mit den gespeicherten Playlists. Zum Zurückwechseln: Stick abziehen und
-den Pi neu starten.
+Der Stick wird **schreibgeschützt** gelesen (die Videos werden nicht verändert),
+daher kann er jederzeit gefahrlos abgezogen werden. **Hotplug:** Du kannst ihn
+im laufenden Betrieb einstecken oder abziehen – BeamPi schaltet automatisch um,
+ein Neustart ist nicht nötig. Steckt kein Stick, läuft BeamPi normal mit den
+gespeicherten Playlists; beim Abziehen kehrt es von selbst dorthin zurück.
 
 ## Anmeldung
 
@@ -127,14 +129,14 @@ schreibgeschützt nach `/media/beampi-usb` ein. Ohne Stick passiert nichts.
 
 **USB-Hotplug:** Mit der udev-Regel `99-beampi-usb.rules` wird ein Stick auch
 **im laufenden Betrieb** automatisch eingehängt bzw. beim Abziehen wieder
-ausgehängt – BeamPi erkennt das (Poll-Watcher) und startet die USB-Show bzw.
-kehrt zum Normalbetrieb zurück, **ganz ohne Neustart**.
+ausgehängt – BeamPi prüft alle paar Sekunden auf Änderungen und startet die
+USB-Show bzw. kehrt zum Normalbetrieb zurück, **ganz ohne Neustart**.
 
 Web-UI: `http://<pi-ip>:8080`
 
 Konfiguration über Umgebungsvariablen: `PORT` (Standard 8080),
-`BEAMPI_DATA_DIR` (Standard `./data`), `BEAMPI_VIDEO_DIR`
-(Standard-Videoverzeichnis `/opt/beampi/videos`).
+`BEAMPI_DATA_DIR` (Datenverzeichnis, Vorgabe `./data`), `BEAMPI_VIDEO_DIR`
+(Videoverzeichnis, Vorgabe `/opt/beampi/videos`).
 
 ## Deployment
 

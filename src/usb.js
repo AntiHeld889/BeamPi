@@ -25,16 +25,16 @@ function naturalCompare(a, b) {
   return a.localeCompare(b, 'de', { numeric: true, sensitivity: 'base' }) || (a < b ? -1 : a > b ? 1 : 0);
 }
 
-function isDir(p) {
+async function isDir(p) {
   try {
-    return fs.statSync(p).isDirectory();
+    return (await fs.promises.stat(p)).isDirectory();
   } catch {
     return false;
   }
 }
 
 /** Mögliche Mount-Roots in Prioritätsreihenfolge, dedupliziert. */
-function candidateRoots() {
+async function candidateRoots() {
   const roots = [];
   const seen = new Set();
   const add = (p) => {
@@ -47,7 +47,7 @@ function candidateRoots() {
   for (const parent of AUTOMOUNT_PARENTS) {
     let entries;
     try {
-      entries = fs.readdirSync(parent);
+      entries = await fs.promises.readdir(parent);
     } catch {
       continue;
     }
@@ -61,10 +61,10 @@ function candidateRoots() {
  * Trenner, Groß/Klein egal, CRLF/BOM von Windows werden toleriert).
  * @returns {{interval_s: number, found: boolean}}
  */
-function parseConfig(root) {
+async function parseConfig(root) {
   let raw;
   try {
-    raw = fs.readFileSync(path.join(root, CONFIG_FILE), 'utf8');
+    raw = await fs.promises.readFile(path.join(root, CONFIG_FILE), 'utf8');
   } catch {
     return { interval_s: DEFAULT_INTERVAL_S, found: false };
   }
@@ -93,20 +93,24 @@ function parseConfig(root) {
  * Sucht einen vorbereiteten BeamPi-USB-Stick (Ordner "Videos" mit Videos darin)
  * und liest dessen Konfiguration aus.
  *
+ * Asynchron (fs.promises), damit ein langsamer/hängender USB-Mount nicht den
+ * Node-Event-Loop blockiert – wichtig für den periodischen Hotplug-Watcher.
+ *
  * @param {string[]} [roots] zu prüfende Mount-Roots (Standard: Auto-Erkennung)
- * @returns {null | {
+ * @returns {Promise<null | {
  *   root: string, videosDir: string, loopVideo: string|null,
  *   videos: string[], intervalS: number, configFound: boolean
- * }}
+ * }>}
  */
-export function detectUsbShow(roots = candidateRoots()) {
-  for (const root of roots) {
+export async function detectUsbShow(roots) {
+  const list = roots ?? (await candidateRoots());
+  for (const root of list) {
     const videosDir = path.join(root, VIDEOS_DIR);
-    if (!isDir(videosDir)) continue;
+    if (!(await isDir(videosDir))) continue;
 
     let entries;
     try {
-      entries = fs.readdirSync(videosDir, { withFileTypes: true });
+      entries = await fs.promises.readdir(videosDir, { withFileTypes: true });
     } catch {
       continue;
     }
@@ -127,7 +131,7 @@ export function detectUsbShow(roots = candidateRoots()) {
     // Ohne abspielbares Material ist der Stick uninteressant – weitersuchen.
     if (videos.length === 0 && !loopVideo) continue;
 
-    const config = parseConfig(root);
+    const config = await parseConfig(root);
     return {
       root,
       videosDir,
