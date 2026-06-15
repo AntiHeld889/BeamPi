@@ -40,6 +40,30 @@ export function scanVideos(dir) {
 }
 
 /**
+ * Liefert alle Unterordner (relativ, POSIX) unterhalb von `dir` – auch LEERE,
+ * die noch keine Videos enthalten. Sortiert.
+ */
+export function scanFolders(dir) {
+  const base = path.resolve(dir);
+  if (!fs.existsSync(base)) return [];
+  let entries;
+  try {
+    entries = fs.readdirSync(base, { recursive: true, withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const folders = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const absolute = path.join(entry.parentPath, entry.name);
+    const relative = path.relative(base, absolute).split(path.sep).join('/');
+    if (relative) folders.push(relative);
+  }
+  folders.sort((a, b) => a.localeCompare(b, 'de'));
+  return folders;
+}
+
+/**
  * Baut aus relativen Pfaden einen Baum:
  * [{ name, path, is_file, children: [...] }], Ordner vor Dateien.
  */
@@ -113,5 +137,10 @@ export class VideoLibrary {
 
   tree() {
     return buildVideoTree(this.list());
+  }
+
+  /** Alle Unterordner (auch leere), relativ und sortiert. */
+  folders() {
+    return scanFolders(this.getDirectory());
   }
 }

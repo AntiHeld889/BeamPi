@@ -1349,6 +1349,15 @@
     if (isStale()) return;
     const settings = data.settings;
 
+    // Ordnerliste fürs Upload-Ziel (inkl. leerer Ordner); optional
+    let uploadFolders = [];
+    try {
+      uploadFolders = (await api('/api/videos')).folders ?? [];
+    } catch {
+      /* Ordnerliste nicht verfügbar – Dropdown zeigt nur das Hauptverzeichnis */
+    }
+    if (isStale()) return;
+
     root.append(
       el('div', { class: 'page-head' },
         el('div', {},
@@ -1512,11 +1521,31 @@
 
     // Ordner + Upload
     const folderInput = el('input', { class: 'input mono', type: 'text', placeholder: 'z. B. veranstaltungen/2026' });
-    const subdirInput = el('input', { class: 'input mono', type: 'text', placeholder: 'leer = Hauptverzeichnis' });
+    const subdirSelect = el('select', { class: 'input mono' },
+      el('option', { value: '' }, '(Hauptverzeichnis)'),
+      ...uploadFolders.map((f) => el('option', { value: f }, f))
+    );
     const fileInput = el('input', { class: 'input', type: 'file', accept: 'video/*,.mkv,.avi,.wmv,.m4v,.mpg,.mpeg', multiple: 'multiple' });
     const progressBar = el('div', { class: 'bar' });
     const progressWrap = el('div', { class: 'upload-progress hidden' }, progressBar);
     const uploadBtn = el('button', { class: 'btn btn--primary', onclick: doUpload }, 'Videos hochladen');
+
+    // Dropdown der Zielordner neu aufbauen (z. B. nach dem Anlegen eines Ordners)
+    async function refreshSubdirOptions(selectPath) {
+      let folders;
+      try {
+        folders = (await api('/api/videos')).folders ?? [];
+      } catch {
+        return; // Liste nicht verfügbar – aktuelle Optionen behalten
+      }
+      const current = selectPath ?? subdirSelect.value;
+      subdirSelect.innerHTML = '';
+      subdirSelect.append(el('option', { value: '' }, '(Hauptverzeichnis)'));
+      for (const f of folders) subdirSelect.append(el('option', { value: f }, f));
+      if (current && [...subdirSelect.options].some((o) => o.value === current)) {
+        subdirSelect.value = current; // neuen/zuletzt gewählten Ordner vorauswählen
+      }
+    }
 
     async function createFolder() {
       const value = folderInput.value.trim();
@@ -1528,6 +1557,7 @@
         await api('/api/folders', { json: { path: value } });
         toast('Ordner wurde erstellt.');
         folderInput.value = '';
+        await refreshSubdirOptions(value); // neuen Ordner ins Upload-Dropdown übernehmen
       } catch (err) {
         toast(err.message, 'error');
       }
@@ -1540,7 +1570,7 @@
         return;
       }
       const formData = new FormData();
-      formData.append('subdirectory', subdirInput.value.trim());
+      formData.append('subdirectory', subdirSelect.value);
       for (const file of files) formData.append('video_files', file);
 
       const xhr = new XMLHttpRequest();
@@ -1593,8 +1623,8 @@
           el('p', { class: 'hint', style: 'margin:0 0 14px;color:var(--text-faint);font-size:13px' },
             'Mehrere Dateien möglich. Erlaubt: mp4, mkv, mov, avi, mpg, webm, m4v, wmv'),
           el('div', { class: 'field' },
-            el('label', {}, 'Zielordner (relativ, optional)'),
-            subdirInput
+            el('label', {}, 'Zielordner'),
+            subdirSelect
           ),
           el('div', { class: 'field' },
             el('label', {}, 'Videodateien'),

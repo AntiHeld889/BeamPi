@@ -771,6 +771,7 @@ app.get('/api/videos', (req, res) => {
   res.json({
     videos: files.map((file) => file.path),
     tree: library.tree(),
+    folders: library.folders(), // alle Unterordner (auch leere) für Upload-Ziel
     files: files.map((file) => ({
       path: file.path,
       size: file.size,
