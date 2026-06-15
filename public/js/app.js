@@ -992,6 +992,7 @@
     const libFolders = [...(videoData.folders ?? [])].sort(compareFolderPaths);
     const folderFilter = el('select', { class: 'input mono', onchange: () => renderTree() },
       el('option', { value: '' }, '(Alle Ordner)'),
+      el('option', { value: '.' }, 'Hauptverzeichnis'), // nur Videos im Stammordner
       ...libFolders.map((f) => el('option', { value: f }, indentFolderLabel(f)))
     );
 
@@ -1284,9 +1285,11 @@
         treeContainer.append(buildTreeNodes(videoData.tree));
         return;
       }
-      // Sonst flache Liste, gefiltert nach Ordner (rekursiv) und/oder Suchbegriff
+      // Sonst flache Liste, gefiltert nach Ordner (rekursiv) und/oder Suchbegriff.
+      // folder === '.' bedeutet: nur Videos direkt im Hauptverzeichnis.
       let matches = videoData.videos;
-      if (folder) matches = matches.filter((v) => v.startsWith(`${folder}/`));
+      if (folder === '.') matches = matches.filter((v) => !v.includes('/'));
+      else if (folder) matches = matches.filter((v) => v.startsWith(`${folder}/`));
       if (query) matches = matches.filter((v) => v.toLowerCase().includes(query));
       if (matches.length === 0) {
         treeContainer.append(el('p', { class: 'tree-empty' },
