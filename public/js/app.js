@@ -967,6 +967,12 @@
       class: 'input', type: 'search', placeholder: 'Videos durchsuchen…',
       oninput: () => renderTree(),
     });
+    // Ordner-Filter: schränkt die Bibliothek auf einen Unterordner (rekursiv) ein
+    const libFolders = videoData.folders ?? [];
+    const folderFilter = el('select', { class: 'input mono', onchange: () => renderTree() },
+      el('option', { value: '' }, '(Alle Ordner)'),
+      ...libFolders.map((f) => el('option', { value: f }, f))
+    );
 
     function libSubText() {
       const count = videoData.videos.length;
@@ -985,6 +991,7 @@
         )
       ),
       el('div', { class: 'panel-body' },
+        libFolders.length ? el('div', { style: 'margin-bottom:10px' }, folderFilter) : null,
         el('div', { class: 'search-wrap', style: 'max-width:none;margin-bottom:12px' }, searchInput),
         treeContainer
       )
@@ -1244,19 +1251,25 @@
 
     function renderTree() {
       treeContainer.innerHTML = '';
-      const query = searchInput.value.trim().toLowerCase();
       if (videoData.videos.length === 0) {
         treeContainer.append(el('p', { class: 'tree-empty' },
           'Keine Videos gefunden. Lade unter Einstellungen Videos hoch.'));
         return;
       }
-      if (!query) {
+      const query = searchInput.value.trim().toLowerCase();
+      const folder = folderFilter.value;
+      // Ohne Filter und ohne Suche: normaler Ordnerbaum
+      if (!folder && !query) {
         treeContainer.append(buildTreeNodes(videoData.tree));
         return;
       }
-      const matches = videoData.videos.filter((v) => v.toLowerCase().includes(query));
+      // Sonst flache Liste, gefiltert nach Ordner (rekursiv) und/oder Suchbegriff
+      let matches = videoData.videos;
+      if (folder) matches = matches.filter((v) => v.startsWith(`${folder}/`));
+      if (query) matches = matches.filter((v) => v.toLowerCase().includes(query));
       if (matches.length === 0) {
-        treeContainer.append(el('p', { class: 'tree-empty' }, 'Keine Videos gefunden, die den Suchbegriff enthalten.'));
+        treeContainer.append(el('p', { class: 'tree-empty' },
+          folder ? 'Keine Videos in diesem Ordner.' : 'Keine Videos gefunden, die den Suchbegriff enthalten.'));
         return;
       }
       const list = el('ul', { class: 'tree' });
