@@ -224,6 +224,14 @@ function tryStartUsbShow() {
 /** @returns {{ok: boolean, error?: string}} */
 function triggerNext() {
   if (!activePlaylist) return { ok: false, error: 'Keine aktive Playlist.' };
+  // Solange ein Trigger-Video läuft (oder eins ansteht), KEIN weiterer Trigger.
+  // Der Trigger darf erst wieder auslösen, wenn das laufende Video zu Ende ist
+  // (dann läuft wieder Loop/Stille). Gilt für alle Quellen: Web, GPIO, Webhook,
+  // Auto-Trigger.
+  const status = player.getStatus();
+  if (status.mode === 'trigger' || status.queued > 0) {
+    return { ok: false, error: 'Es läuft bereits ein Video.' };
+  }
   const playlist = playlists.get(activePlaylist);
   if (!playlist || playlist.videos.length === 0) {
     return { ok: false, error: 'Die aktive Playlist enthält keine Videos.' };
