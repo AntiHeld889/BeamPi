@@ -346,6 +346,7 @@
     const triggerBusy = S.status.mode === 'trigger' || S.status.queued > 0;
     $('#trigger-btn').disabled = !S.active || triggerBusy;
     updateLive();
+    startRemainTimer();
   }
 
   function updateActiveMarkers() {
@@ -407,6 +408,42 @@
   function startLiveTimer() {
     if (live.timer) return;
     live.timer = setInterval(syncLivePosition, 2000);
+  }
+
+  // Restzeit-Anzeige im Deck: pollt die Abspielposition direkt von mpv (läuft
+  // auch, wenn die Live-Vorschau eingeklappt ist).
+  let remainTimer = null;
+  function stopRemainTimer() {
+    clearInterval(remainTimer);
+    remainTimer = null;
+  }
+  function startRemainTimer() {
+    if (remainTimer) return;
+    updateRemaining();
+    remainTimer = setInterval(updateRemaining, 1000);
+  }
+  async function updateRemaining() {
+    const node = $('#deck-remaining');
+    if (!node) {
+      stopRemainTimer(); // Dashboard verlassen
+      return;
+    }
+    if (!S.status.current_video) {
+      node.textContent = '—';
+      return;
+    }
+    try {
+      const data = await api('/api/player/position');
+      const info = data.playback;
+      if (!info || info.position === null || !Number.isFinite(info.duration) || info.duration <= 0) {
+        node.textContent = '—';
+        return;
+      }
+      const remaining = Math.max(0, info.duration - info.position);
+      node.textContent = (info.mode === 'loop' ? '↻ ' : '') + fmtDuration(remaining);
+    } catch {
+      /* Netzwerkfehler ignorieren */
+    }
   }
 
   function stopLivePlayback(video) {
@@ -676,6 +713,7 @@
         el('div', { class: 'deck-playlist', id: 'deck-playlist' }),
         el('div', { class: 'deck-rows' },
           el('div', { class: 'deck-row' }, el('b', {}, 'Läuft gerade'), el('span', { class: 'mono', id: 'deck-current' })),
+          el('div', { class: 'deck-row' }, el('b', {}, 'Restzeit'), el('span', { class: 'mono', id: 'deck-remaining' }, '—')),
           el('div', { class: 'deck-row' }, el('b', {}, 'Als Nächstes'), el('span', { class: 'mono', id: 'deck-next' })),
           el('div', { class: 'deck-row' }, el('b', {}, 'Loop-Video'), el('span', { class: 'mono', id: 'deck-loop' }))
         ),
