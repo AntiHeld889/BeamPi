@@ -341,7 +341,10 @@
     const usbBanner = $('#usb-banner');
     if (usbBanner) usbBanner.hidden = !S.usbMode;
 
-    $('#trigger-btn').disabled = !S.active;
+    // Trigger ausgegraut, wenn keine Playlist aktiv ist ODER bereits ein
+    // Trigger-Video läuft/ansteht (passend zur Server-Sperre in triggerNext).
+    const triggerBusy = S.status.mode === 'trigger' || S.status.queued > 0;
+    $('#trigger-btn').disabled = !S.active || triggerBusy;
     updateLive();
   }
 
