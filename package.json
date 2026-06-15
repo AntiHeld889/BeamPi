@@ -1,6 +1,6 @@
 {
   "name": "beampi",
-  "version": "1.14.4",
+  "version": "1.14.5",
   "description": "BeamPi – Beamer-Videoplayer mit Loop/Trigger-Playlists für den Raspberry Pi",
   "type": "module",
   "main": "server.js",

@@ -463,6 +463,7 @@
 
     if (!live.open) {
       stopLivePlayback(video);
+      updateLiveProgress();
       return;
     }
 
@@ -471,6 +472,7 @@
       stopLivePlayback(video);
       overlay.classList.remove('hidden');
       overlay.textContent = 'Keine Wiedergabe';
+      updateLiveProgress();
       return;
     }
 
@@ -488,6 +490,33 @@
       playLive(video);
     }
     startLiveTimer();
+    updateLiveProgress();
+  }
+
+  /** Laufband unter der Live-Vorschau: Fortschritt des aktuellen Videos. */
+  function updateLiveProgress() {
+    const wrap = $('#live-progress');
+    if (!wrap) return;
+    const video = $('#live-video');
+    const dur = video?.duration;
+    const cur = video?.currentTime ?? 0;
+    const show = live.open && Boolean(S.status.current_video) && Number.isFinite(dur) && dur > 0;
+    wrap.classList.toggle('hidden', !show);
+    if (!show) return;
+    const pct = Math.max(0, Math.min(100, (cur / dur) * 100));
+    const bar = $('#live-bar');
+    const prev = parseFloat(bar.style.width) || 0;
+    if (pct < prev - 0.5) {
+      // Loop-Wrap/Rücksprung: ohne Animation zurücksetzen (kein Rückwärtslauf)
+      bar.classList.add('no-anim');
+      bar.style.width = `${pct}%`;
+      void bar.offsetWidth; // Reflow erzwingen, damit no-anim greift
+      bar.classList.remove('no-anim');
+    } else {
+      bar.style.width = `${pct}%`;
+    }
+    $('#live-elapsed').textContent = cur > 0 ? fmtDuration(cur) : '0:00';
+    $('#live-total').textContent = fmtDuration(dur);
   }
 
   /** play() mit iOS-Fallback: unmuted Autoplay ist verboten → stumm weiterspielen. */
@@ -709,6 +738,10 @@
         overlay.textContent = 'Dieses Format kann der Browser nicht abspielen.';
       }
     });
+    // Laufband direkt aus dem (mit mpv synchronisierten) Vorschau-Video speisen
+    liveVideo.addEventListener('timeupdate', updateLiveProgress);
+    liveVideo.addEventListener('loadedmetadata', updateLiveProgress);
+    liveVideo.addEventListener('emptied', updateLiveProgress);
 
     root.append(
       el('section', { class: 'card live-card' },
@@ -723,6 +756,12 @@
         el('div', { class: 'live-wrap', id: 'live-wrap' },
           liveVideo,
           el('div', { class: 'live-overlay', id: 'live-overlay' }, 'Keine Wiedergabe')
+        ),
+        // Laufband: Fortschritt des aktuell laufenden Videos
+        el('div', { class: 'live-progress hidden', id: 'live-progress' },
+          el('span', { class: 'live-time mono', id: 'live-elapsed' }, '0:00'),
+          el('div', { class: 'live-track' }, el('div', { class: 'live-bar', id: 'live-bar' })),
+          el('span', { class: 'live-time mono', id: 'live-total' }, '0:00')
         )
       )
     );
