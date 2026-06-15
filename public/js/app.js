@@ -42,6 +42,26 @@
     return `${Math.max(1, Math.round(bytes / 1024))} kB`;
   }
 
+  // Ordnerpfade hierarchisch sortieren (Kinder direkt unter ihrem Elternordner)
+  function compareFolderPaths(a, b) {
+    const pa = a.split('/');
+    const pb = b.split('/');
+    const n = Math.min(pa.length, pb.length);
+    for (let i = 0; i < n; i += 1) {
+      const c = pa[i].localeCompare(pb[i], 'de', { numeric: true, sensitivity: 'base' });
+      if (c !== 0) return c;
+    }
+    return pa.length - pb.length;
+  }
+
+  // Eingerückte Beschriftung für ein Ordner-Dropdown (Baum-Optik per Tiefe)
+  function indentFolderLabel(folderPath) {
+    const parts = folderPath.split('/');
+    const depth = parts.length - 1;
+    const name = parts[parts.length - 1];
+    return depth === 0 ? name : `${'   '.repeat(depth)}└ ${name}`;
+  }
+
   // --- API ------------------------------------------------------------------
 
   async function api(path, options = {}) {
@@ -967,11 +987,12 @@
       class: 'input', type: 'search', placeholder: 'Videos durchsuchen…',
       oninput: () => renderTree(),
     });
-    // Ordner-Filter: schränkt die Bibliothek auf einen Unterordner (rekursiv) ein
-    const libFolders = videoData.folders ?? [];
+    // Ordner-Filter: schränkt die Bibliothek auf einen Unterordner (rekursiv) ein.
+    // Hierarchisch sortiert + eingerückt → Baum-Optik im Dropdown.
+    const libFolders = [...(videoData.folders ?? [])].sort(compareFolderPaths);
     const folderFilter = el('select', { class: 'input mono', onchange: () => renderTree() },
       el('option', { value: '' }, '(Alle Ordner)'),
-      ...libFolders.map((f) => el('option', { value: f }, f))
+      ...libFolders.map((f) => el('option', { value: f }, indentFolderLabel(f)))
     );
 
     function libSubText() {
