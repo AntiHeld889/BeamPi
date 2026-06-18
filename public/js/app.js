@@ -133,6 +133,10 @@
     if (typeof snap.muted === 'boolean' && Date.now() - lastVolumeSentAt > 1200) S.muted = snap.muted;
     if (snap.auto_trigger) S.autoTrigger = snap.auto_trigger;
     S.usbMode = Boolean(snap.usb_mode);
+    if (snap.version) {
+      const fv = $('#footer-version');
+      if (fv) fv.textContent = `BeamPi v${snap.version}`;
+    }
     // Uhren-Offset zum Server (Pi ohne RTC kann falsch gehen)
     if (typeof snap.now === 'number') S.clockOffset = snap.now - Date.now();
     updateLamp();
@@ -1708,6 +1712,78 @@
         )
       )
     );
+
+    // --- Software-Update -------------------------------------------------------
+    const updStatus = el('p', { class: 'hint', style: 'margin:0 0 14px;font-size:13px' }, 'Suche nach Updates …');
+    const updBtn = el('button', { class: 'btn btn--primary', onclick: doUpdate, disabled: 'disabled' }, 'Jetzt aktualisieren');
+    const updCheckBtn = el('button', { class: 'btn btn--ghost', onclick: () => checkUpdate() }, 'Erneut prüfen');
+
+    async function checkUpdate() {
+      updStatus.textContent = 'Suche nach Updates …';
+      updBtn.disabled = true;
+      updCheckBtn.disabled = true;
+      try {
+        const v = await api('/api/version');
+        if (isStale()) return;
+        if (v.error) {
+          updStatus.textContent = `Installiert: v${v.current}. ${v.error}`;
+        } else if (v.update_available) {
+          updStatus.textContent = `Installiert: v${v.current} · Neue Version v${v.latest} verfügbar.`;
+        } else {
+          updStatus.textContent = `Installiert: v${v.current} – du bist auf dem neuesten Stand.`;
+        }
+        updBtn.disabled = !v.update_available;
+      } catch (err) {
+        if (isStale()) return;
+        updStatus.textContent = `Versionsprüfung fehlgeschlagen: ${err.message}`;
+      } finally {
+        if (!isStale()) updCheckBtn.disabled = false;
+      }
+    }
+
+    async function doUpdate() {
+      if (!window.confirm('BeamPi jetzt auf die neueste Version aktualisieren? Der Player startet dabei kurz neu.')) return;
+      updBtn.disabled = true;
+      updCheckBtn.disabled = true;
+      try {
+        await api('/api/update', { method: 'POST', json: {} });
+        toast('Update gestartet – BeamPi startet neu …', 'info');
+        updStatus.textContent = 'Update läuft – BeamPi startet neu. Diese Seite lädt gleich automatisch neu …';
+        waitForRestart();
+      } catch (err) {
+        toast(err.message, 'error');
+        updStatus.textContent = err.message;
+        updCheckBtn.disabled = false;
+      }
+    }
+
+    // Nach dem Auslösen ist der Server für ein paar Sekunden weg (Neustart);
+    // sobald er wieder antwortet, die Seite mit dem neuen Code/Assets neu laden.
+    function waitForRestart() {
+      let sawDown = false;
+      const started = Date.now();
+      const timer = setInterval(async () => {
+        if (Date.now() - started > 120000) { clearInterval(timer); return; }
+        try {
+          await api('/api/session');
+          if (sawDown) { clearInterval(timer); location.reload(); }
+        } catch {
+          sawDown = true; // Server gerade im Neustart
+        }
+      }, 2000);
+    }
+
+    root.append(
+      el('section', { class: 'card card-pad', style: 'margin-top:18px' },
+        el('h3', { style: 'margin-bottom:6px' }, 'Software-Update'),
+        el('p', { class: 'hint', style: 'margin:0 0 12px;color:var(--text-faint);font-size:13px' },
+          'Holt die neueste Version direkt von GitHub. Playlists, Videos und Einstellungen bleiben erhalten.'),
+        updStatus,
+        el('div', { style: 'display:flex;gap:10px;flex-wrap:wrap' }, updBtn, updCheckBtn)
+      )
+    );
+
+    checkUpdate(); // beim Öffnen der Einstellungen direkt prüfen
   }
 
   // --- Anmeldung ---------------------------------------------------------------------------------

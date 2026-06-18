@@ -20,6 +20,7 @@ Playlist einmal abgespielt, danach geht es zurück zum Loop.
 - GPIO-Taster als Trigger: Taster zwischen konfigurierbarem BCM-Pin und GND (interner Pull-up, Entprellung; benötigt das Paket `gpiod`)
 - USB-Stick-Modus mit Hotplug: vorbereiteten USB-Stick einstecken – auch im laufenden Betrieb, ganz ohne Web-Oberfläche und ohne Neustart
 - Trigger-Schutz: solange ein getriggertes Video läuft, werden weitere Trigger (Web, GPIO, Webhook, Auto-Trigger) ignoriert – erst nach Videoende geht es weiter
+- Software-Update per Knopfdruck unter „Einstellungen → Software-Update": zieht den neuesten Stand direkt von GitHub und startet neu – Playlists, Videos und Einstellungen bleiben erhalten
 - HTTP-API kompatibel zum Original
 
 ## USB-Stick-Modus (ohne Technikkenntnisse)
@@ -108,6 +109,8 @@ Trigger-Hardware: `/api/trigger` und `/webhook/<playlist>`.
 | GET | `/api/audio-devices` | Verfügbare mpv-Audio-Ausgänge auflisten |
 | POST | `/api/folders` | Ordner anlegen `{path}` |
 | POST | `/api/upload` | Videos hochladen (multipart, Feld `video_files`) |
+| GET | `/api/version` | Installierte Version + Abgleich mit GitHub `{current, latest, update_available}` |
+| POST | `/api/update` | Self-Update anstoßen (zieht den neuesten Stand, startet neu) |
 
 ## Installation auf dem Raspberry Pi
 
@@ -152,3 +155,14 @@ reine UI-Änderungen laufen ohne Unterbrechung der Wiedergabe ein.
 Das SSH-Passwort liest das Skript aus `.deploy-pass` (nicht im Repo) oder
 `$BEAMPI_SSH_PASS`; mit eingerichtetem SSH-Key braucht es gar keins.
 Host/Pfad/Port sind per `BEAMPI_HOST`, `BEAMPI_PATH`, `BEAMPI_PORT` übersteuerbar.
+
+### Self-Update vom Pi aus
+
+Statt `deploy.sh` kann der Pi sich auch selbst aktualisieren: „Einstellungen →
+Software-Update → Jetzt aktualisieren". Dahinter steckt `deploy/self-update.sh` —
+es lädt den aktuellen `main`-Stand als Tarball von GitHub (kein git-Clone nötig),
+ersetzt den Code per rsync (ohne `data/`, `videos/`, `node_modules/`, Secrets),
+ruft `npm install` und beendet den Dienst; systemd (`Restart=always`) startet ihn
+mit dem neuen Code neu. Voraussetzung: `curl`, `tar` und `rsync` auf dem Pi
+(Standard bei Raspberry Pi OS). Da der reguläre Weg ohnehin lokal → GitHub →
+Pi läuft, zieht der Knopf genau den Stand, den `deploy.sh` zuvor gepusht hat.

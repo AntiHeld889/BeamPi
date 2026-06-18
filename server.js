@@ -13,10 +13,18 @@ import { Player, VideoNotFoundError } from './src/player.js';
 import { GpioButton } from './src/gpio.js';
 import { detectUsbShow } from './src/usb.js';
 import { setSystemVolume } from './src/audio.js';
+import {
+  readVersion,
+  compareVersions,
+  fetchLatestVersion,
+  startSelfUpdate,
+  isUpdating,
+} from './src/updater.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 8080);
 const DATA_DIR = process.env.BEAMPI_DATA_DIR || path.join(__dirname, 'data');
+const VERSION = readVersion(__dirname);
 
 // Zustand ---------------------------------------------------------------------
 
@@ -433,6 +441,7 @@ function stateSnapshot() {
     muted: settings.getMuted(),
     auto_trigger: autoTriggerSnapshot(),
     usb_mode: usbMode,
+    version: VERSION,
     now: Date.now(), // für driftfreie Countdown-Anzeige im Client
   };
 }
@@ -643,6 +652,33 @@ app.put('/api/auto-trigger', (req, res) => {
 app.get('/api/audio-devices', async (req, res) => {
   const devices = await player.getAudioDeviceList();
   res.json({ devices, current: settings.getAudioOutput() });
+});
+
+// Installierte Version + Abgleich mit dem aktuellen Stand auf GitHub.
+app.get('/api/version', async (req, res) => {
+  const result = { current: VERSION, latest: null, update_available: false, updating: isUpdating() };
+  try {
+    const latest = await fetchLatestVersion();
+    result.latest = latest;
+    result.update_available = compareVersions(latest, VERSION) > 0;
+  } catch (err) {
+    result.error = `Konnte GitHub nicht erreichen: ${err.message}`;
+  }
+  res.json(result);
+});
+
+// Self-Update anstoßen: zieht den neuesten Stand und startet den Dienst neu.
+app.post('/api/update', (req, res) => {
+  if (isUpdating()) {
+    return res.status(409).json({ status: 'error', message: 'Es läuft bereits ein Update.' });
+  }
+  try {
+    startSelfUpdate(__dirname);
+  } catch (err) {
+    return res.status(500).json({ status: 'error', message: err.message });
+  }
+  // Antwort sofort senden – der Neustart erfolgt gleich im Hintergrund.
+  res.json({ status: 'ok', message: 'Update gestartet – BeamPi startet in Kürze neu.' });
 });
 
 app.get('/api/playlists', (req, res) => {
