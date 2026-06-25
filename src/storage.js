@@ -44,6 +44,7 @@ export class Storage {
         name: String(payload?.name ?? name),
         loop_video: payload?.loop_video || null,
         videos: Array.isArray(payload?.videos) ? payload.videos.map(String) : [],
+        gpio_pin: Number.isInteger(payload?.gpio_pin) ? payload.gpio_pin : null,
       });
     }
     return playlists;
@@ -56,6 +57,7 @@ export class Storage {
         name: playlist.name,
         loop_video: playlist.loop_video || null,
         videos: playlist.videos,
+        gpio_pin: Number.isInteger(playlist.gpio_pin) ? playlist.gpio_pin : null,
       };
     }
     this.#writeJson(this.playlistsPath, payload);

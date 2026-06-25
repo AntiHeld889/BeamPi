@@ -17,7 +17,6 @@ const DEFAULTS = {
   trigger_end_webhook_url: '',
   video_directory: DEFAULT_VIDEO_DIRECTORY,
   auto_start_playlist: '',
-  gpio_pin: '',
   gpio_debounce_ms: '250',
   volume: '100',
   muted: '0',
@@ -129,20 +128,8 @@ export class SettingsManager {
     return this.settings.auto_start_playlist;
   }
 
-  /** @param {string} pin BCM-Pin als String, '' = deaktiviert */
-  setGpioPin(pin) {
-    this.settings.gpio_pin = (pin || '').trim();
-    this.save();
-  }
-
-  /** @returns {number|null} BCM-Pin oder null wenn deaktiviert */
-  getGpioPin() {
-    const value = this.settings.gpio_pin.trim();
-    if (value === '') return null;
-    const pin = Number(value);
-    return Number.isInteger(pin) && pin >= 0 && pin <= 27 ? pin : null;
-  }
-
+  // GPIO-Pins werden pro Playlist definiert (playlists.json), nicht mehr global.
+  // Die Entprellung bleibt global und gilt für alle Playlist-Taster.
   setGpioDebounceMs(value) {
     this.settings.gpio_debounce_ms = String(value);
     this.save();

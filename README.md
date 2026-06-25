@@ -17,7 +17,7 @@ Playlist einmal abgespielt, danach geht es zurück zum Loop.
 - Einstellungen: Audio-Ausgabegerät, Videoverzeichnis, Auto-Start-Playlist
 - Video-Upload mit wählbarem Zielordner und „Neuen Ordner anlegen" direkt im Browser (auch verschachtelte Unterordner)
 - Ausgehende Webhooks bei Trigger-Start und Trigger-Ende (sendet JSON per POST; schlägt das fehl, wird ersatzweise ein GET-Aufruf versucht)
-- GPIO-Taster als Trigger: Taster zwischen konfigurierbarem BCM-Pin und GND (interner Pull-up, Entprellung; benötigt das Paket `gpiod`)
+- GPIO-Taster pro Playlist: jede Playlist kann einen eigenen BCM-Pin definieren (Taster zwischen Pin und GND, interner Pull-up). Ein Druck schaltet genau diese Playlist zum nächsten Video weiter und aktiviert sie bei Bedarf; jeder Pin gehört nur einer Playlist. Die Entprellzeit gilt global (Einstellungen); benötigt das Paket `gpiod`
 - USB-Stick-Modus mit Hotplug: vorbereiteten USB-Stick einstecken – auch im laufenden Betrieb, ganz ohne Web-Oberfläche und ohne Neustart
 - Trigger-Schutz: solange ein getriggertes Video läuft, werden weitere Trigger (Web, GPIO, Webhook, Auto-Trigger) ignoriert – erst nach Videoende geht es weiter
 - Software-Update per Knopfdruck unter „Einstellungen → Software-Update": zieht den neuesten Stand direkt von GitHub und startet neu – Playlists, Videos und Einstellungen bleiben erhalten
@@ -91,8 +91,8 @@ Trigger-Hardware: `/api/trigger` und `/webhook/<playlist>`.
 | GET | `/api/state` | Kompletter Zustand (Playlists, Settings, Status) |
 | GET | `/api/events` | Server-Sent-Events-Stream mit Live-Status |
 | GET | `/api/playlists` | Alle Playlists |
-| POST | `/api/playlists` | Playlist anlegen `{name, loop_video, videos}` |
-| PUT | `/api/playlists/<name>` | Playlist ändern |
+| POST | `/api/playlists` | Playlist anlegen `{name, loop_video, videos, gpio_pin}` (gpio_pin optional, BCM 0–27 oder leer) |
+| PUT | `/api/playlists/<name>` | Playlist ändern (inkl. `gpio_pin`) |
 | DELETE | `/api/playlists/<name>` | Playlist löschen |
 | POST | `/api/playlists/<name>/rename` | Playlist umbenennen `{name}` – aktive/Auto-Start-Referenzen ziehen mit |
 | POST | `/api/playlists/<name>/duplicate` | Playlist duplizieren (optional `{name}`) |

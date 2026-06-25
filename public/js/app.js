@@ -959,6 +959,13 @@
     }
     rebuildLoopOptions(playlist?.loop_video ?? '');
 
+    const gpioInput = el('input', {
+      class: 'input mono', id: 'pl-gpio', type: 'number', inputmode: 'numeric',
+      min: '0', max: '27', step: '1',
+      value: playlist && Number.isInteger(playlist.gpio_pin) ? String(playlist.gpio_pin) : '',
+      placeholder: 'z. B. 17 – leer = kein Taster',
+    });
+
     root.append(
       el('section', { class: 'card card-pad', style: 'margin-bottom:18px' },
         el('div', { class: 'settings-grid' },
@@ -971,6 +978,11 @@
             el('label', { for: 'pl-loop' }, 'Loop-Video'),
             loopSelect,
             el('div', { class: 'hint' }, 'Läuft in Dauerschleife, bis ein Trigger ausgelöst wird.')
+          ),
+          el('div', { class: 'field', style: 'margin:0' },
+            el('label', { for: 'pl-gpio' }, 'GPIO-Taster (BCM-Pin)'),
+            gpioInput,
+            el('div', { class: 'hint' }, 'Taster zwischen diesem GPIO-Pin und GND. Ein Druck schaltet diese Playlist zum nächsten Video weiter (aktiviert sie bei Bedarf). Jeder Pin darf nur einer Playlist gehören.')
           )
         )
       )
@@ -1342,6 +1354,7 @@
     async function save() {
       const name = nameInput.value.trim();
       const loopVideo = loopSelect.value || null;
+      const gpioPin = gpioInput.value.trim(); // '' = kein Taster; Server validiert 0–27
       if (!name) {
         toast('Bitte einen Namen für die Playlist eingeben.', 'error');
         nameInput.focus();
@@ -1355,7 +1368,7 @@
           // steckt nicht unter einem nicht mehr existierenden Namen fest.
           const result = await api(`/api/playlists/${encodeURIComponent(editName)}`, {
             method: 'PUT',
-            json: { loop_video: loopVideo, videos: selected },
+            json: { loop_video: loopVideo, videos: selected, gpio_pin: gpioPin },
           });
           if (result?.warning) toast(result.warning, 'error');
           if (name !== editName) {
@@ -1366,7 +1379,7 @@
           }
           toast('Playlist aktualisiert.');
         } else {
-          await api('/api/playlists', { json: { name, loop_video: loopVideo, videos: selected } });
+          await api('/api/playlists', { json: { name, loop_video: loopVideo, videos: selected, gpio_pin: gpioPin } });
           toast('Playlist gespeichert.');
         }
         await loadState();
@@ -1458,28 +1471,32 @@
         el('option', { value: p.name, ...(settings.auto_start_playlist === p.name ? { selected: 'selected' } : {}) }, p.name)
       )
     );
-    const gpioPinInput = el('input', {
-      class: 'input mono', type: 'number', inputmode: 'numeric', min: '0', max: '27', step: '1',
-      value: settings.gpio_pin, placeholder: 'z. B. 17 – leer = deaktiviert',
-    });
     const gpioDebounceInput = el('input', {
       class: 'input mono', type: 'number', inputmode: 'numeric', min: '50', max: '5000', step: '10',
       value: settings.gpio_debounce_ms,
     });
-    const gpioStatusChip = el('span', { class: 'chip' }, '');
+    // Status aller Playlist-Taster (data.gpio ist jetzt eine Liste je Pin)
+    const gpioStatusBox = el('div', { style: 'display:flex;flex-direction:column;gap:6px' });
 
-    function renderGpioStatus(gpioStatus) {
-      gpioStatusChip.classList.remove('chip--loop', 'chip--amber');
-      if (!gpioStatus || gpioStatus.pin === null) {
-        gpioStatusChip.textContent = 'Taster deaktiviert';
-      } else if (gpioStatus.error) {
-        gpioStatusChip.textContent = `Fehler: ${gpioStatus.error}`;
-      } else if (gpioStatus.running) {
-        gpioStatusChip.classList.add('chip--loop');
-        gpioStatusChip.textContent = `Taster aktiv an GPIO${gpioStatus.pin}`;
-      } else {
-        gpioStatusChip.classList.add('chip--amber');
-        gpioStatusChip.textContent = `GPIO${gpioStatus.pin} wird gestartet …`;
+    function renderGpioStatus(list) {
+      gpioStatusBox.innerHTML = '';
+      const items = Array.isArray(list) ? list : [];
+      if (items.length === 0) {
+        gpioStatusBox.append(el('span', { class: 'chip' }, 'Keine Playlist-Taster konfiguriert'));
+        return;
+      }
+      for (const g of items) {
+        const chip = el('span', { class: 'chip' }, '');
+        if (g.error) {
+          chip.textContent = `GPIO${g.pin} (${g.playlist}): Fehler – ${g.error}`;
+        } else if (g.running) {
+          chip.classList.add('chip--loop');
+          chip.textContent = `GPIO${g.pin} → „${g.playlist}" aktiv`;
+        } else {
+          chip.classList.add('chip--amber');
+          chip.textContent = `GPIO${g.pin} → „${g.playlist}" wird gestartet …`;
+        }
+        gpioStatusBox.append(chip);
       }
     }
     renderGpioStatus(data.gpio);
@@ -1494,7 +1511,6 @@
             trigger_end_webhook_url: endHook.value,
             video_directory: dirInput.value,
             auto_start_playlist: autoSelect.value,
-            gpio_pin: gpioPinInput.value,
             gpio_debounce_ms: gpioDebounceInput.value || '250',
           },
         });
@@ -1502,7 +1518,7 @@
         for (const warning of result?.warnings ?? []) toast(warning, 'info');
         renderGpioStatus(result?.gpio);
         // Kurz darauf nochmal prüfen, ob die Taster-Überwachung läuft
-        if (result?.gpio && result.gpio.pin !== null) {
+        if (Array.isArray(result?.gpio) && result.gpio.length > 0) {
           setTimeout(async () => {
             if (isStale()) return; // View wurde inzwischen verlassen
             try {
@@ -1555,19 +1571,14 @@
           ),
           el('div', {},
             el('div', { class: 'field' },
-              el('label', {}, 'GPIO-Taster (BCM-Pin)'),
-              gpioPinInput,
-              el('div', { class: 'hint' },
-                'Taster zwischen GPIO-Pin und GND anschließen – der interne Pull-up wird automatisch gesetzt. Beispiel: GPIO17 = Header-Pin 11, GND = Header-Pin 9. Ein Druck wirkt wie der Trigger-Button.')
-            ),
-            el('div', { class: 'field' },
-              el('label', {}, 'Entprellzeit (ms)'),
+              el('label', {}, 'GPIO-Entprellzeit (ms)'),
               gpioDebounceInput,
-              el('div', { class: 'hint' }, 'Mindestabstand zwischen zwei Tastendrücken (50–5000 ms).')
+              el('div', { class: 'hint' },
+                'Mindestabstand zwischen zwei Tastendrücken (50–5000 ms) – gilt für alle Playlist-Taster. Die Pins selbst legst du je Playlist im Editor fest (Taster zwischen GPIO-Pin und GND, interner Pull-up).')
             ),
             el('div', { class: 'field', style: 'margin-bottom:0' },
               el('label', {}, 'Taster-Status'),
-              gpioStatusChip
+              gpioStatusBox
             )
           )
         ),

@@ -10,7 +10,7 @@ import { VideoLibrary, isVideoFile } from './src/videos.js';
 import { MediaMeta } from './src/media.js';
 import { Auth, LoginThrottle, SESSION_MAX_AGE_S } from './src/auth.js';
 import { Player, VideoNotFoundError } from './src/player.js';
-import { GpioButton } from './src/gpio.js';
+import { GpioManager } from './src/gpio-manager.js';
 import { detectUsbShow } from './src/usb.js';
 import { setSystemVolume } from './src/audio.js';
 import {
@@ -63,21 +63,41 @@ function applySystemVolume() {
   setSystemVolume(settings.getVolume(), settings.getMuted());
 }
 
-// GPIO-Taster: ein Druck wirkt wie der Trigger-Button im Dashboard
-const gpio = new GpioButton();
-gpio.on('press', () => {
+// GPIO-Taster: jede Playlist kann einen eigenen Pin definieren. Ein Druck wirkt
+// als „Weiter"-Trigger für GENAU diese Playlist – ist sie nicht aktiv, wird sie
+// erst aktiviert, dann das nächste Video getriggert. Während ein Trigger-Video
+// läuft, wird der Druck ignoriert (gleicher Lockout wie der Trigger-Button).
+const gpio = new GpioManager((playlistName) => {
+  const status = player.getStatus();
+  if (status.mode === 'trigger' || status.queued > 0) {
+    console.log(`GPIO: Taster für „${playlistName}" ignoriert – es läuft bereits ein Video.`);
+    return;
+  }
+  if (activePlaylist !== playlistName) {
+    const started = startPlaylist(playlistName);
+    if (!started.ok) {
+      console.warn(`GPIO: Playlist „${playlistName}" wurde nicht gefunden.`);
+      return;
+    }
+  }
   const result = triggerNext();
   if (result.ok) {
-    console.log('GPIO: Taster gedrückt – nächstes Video getriggert.');
+    console.log(`GPIO: Taster für „${playlistName}" – nächstes Video getriggert.`);
   } else {
-    console.warn(`GPIO: Taster gedrückt, aber kein Trigger möglich: ${result.error}`);
+    console.warn(`GPIO: Taster für „${playlistName}", aber kein Trigger möglich: ${result.error}`);
   }
 });
 
-function applyGpioSettings() {
-  const pin = settings.getGpioPin();
-  if (pin === null) gpio.disable();
-  else gpio.configure(pin, settings.getGpioDebounceMs());
+/** Pin→Playlist-Zuordnung aus allen Playlists an den GPIO-Manager geben. */
+function applyGpioBindings() {
+  const bindings = [];
+  for (const playlist of playlists.values()) {
+    if (playlist.name === USB_PLAYLIST_NAME) continue;
+    if (Number.isInteger(playlist.gpio_pin)) {
+      bindings.push({ pin: playlist.gpio_pin, playlist: playlist.name });
+    }
+  }
+  gpio.apply(bindings, settings.getGpioDebounceMs());
 }
 
 // Auto-Trigger: Countdown läuft nur, solange KEIN Video spielt. Er startet
@@ -162,6 +182,7 @@ function serializePlaylists() {
       name: playlist.name,
       loop_video: playlist.loop_video,
       videos: playlist.videos,
+      gpio_pin: Number.isInteger(playlist.gpio_pin) ? playlist.gpio_pin : null,
       is_active: playlist.name === activePlaylist,
       progress: progress && progress.playlist_name === playlist.name ? progress : null,
     }));
@@ -241,6 +262,7 @@ function startUsbShow(show) {
     name: USB_PLAYLIST_NAME,
     loop_video: show.loopVideo,
     videos: show.videos,
+    gpio_pin: null,
   });
   usbMode = true;
   lastUsbSignature = usbSignature(show);
@@ -349,6 +371,7 @@ function deletePlaylist(name) {
     settings.setAutoStartPlaylist(null);
   }
   savePlaylists();
+  applyGpioBindings(); // gelöschter Pin freigeben
   broadcastState();
   return true;
 }
@@ -376,7 +399,8 @@ function duplicatePlaylist(name, requestedName) {
     let suffix = 2;
     while (playlists.has(candidate)) candidate = `${base} ${suffix++}`;
   }
-  const copy = { name: candidate, loop_video: original.loop_video, videos: [...original.videos] };
+  // gpio_pin NICHT mitkopieren – ein Pin darf nur einer Playlist gehören.
+  const copy = { name: candidate, loop_video: original.loop_video, videos: [...original.videos], gpio_pin: null };
   playlists.set(candidate, copy);
   savePlaylists();
   broadcastState();
@@ -413,6 +437,7 @@ function renamePlaylist(name, requestedName) {
   if (settings.getAutoStartPlaylist() === name) settings.setAutoStartPlaylist(newName);
 
   savePlaylists();
+  applyGpioBindings(); // Pin-Zuordnung zeigt jetzt auf den neuen Namen
   broadcastState();
   return playlist;
 }
@@ -424,6 +449,34 @@ function validatePlaylistVideos(loopVideo, videos) {
   }
   for (const video of videos) {
     if (!known.has(video)) return `Video „${video}" wurde nicht gefunden.`;
+  }
+  return null;
+}
+
+/**
+ * GPIO-Pin einer Playlist normalisieren. Leer/null = kein Pin.
+ * @returns {number|null}
+ * @throws {Error} bei ungültigem Pin (Nachricht für die API)
+ */
+function parseGpioPin(value) {
+  if (value === null || value === undefined || String(value).trim() === '') return null;
+  const pin = Number(value);
+  if (!Number.isInteger(pin) || pin < 0 || pin > 27) {
+    throw new Error('GPIO-Pin muss eine BCM-Nummer zwischen 0 und 27 sein.');
+  }
+  return pin;
+}
+
+/**
+ * Prüft, ob der Pin schon von einer ANDEREN Playlist belegt ist (ein Pin darf
+ * nur einer Playlist zugeordnet sein).
+ * @returns {string|null} Name der kollidierenden Playlist oder null
+ */
+function gpioPinConflict(pin, exceptName) {
+  if (pin === null) return null;
+  for (const playlist of playlists.values()) {
+    if (playlist.name === exceptName || playlist.name === USB_PLAYLIST_NAME) continue;
+    if (playlist.gpio_pin === pin) return playlist.name;
   }
   return null;
 }
@@ -695,9 +748,18 @@ app.post('/api/playlists', (req, res) => {
   if (playlists.has(name)) return res.status(409).json({ status: 'error', message: 'Eine Playlist mit diesem Namen existiert bereits.' });
   const invalid = validatePlaylistVideos(loopVideo, videos);
   if (invalid) return res.status(400).json({ status: 'error', message: invalid });
-  const playlist = { name, loop_video: loopVideo, videos };
+  let gpioPin;
+  try {
+    gpioPin = parseGpioPin(req.body?.gpio_pin);
+  } catch (err) {
+    return res.status(400).json({ status: 'error', message: err.message });
+  }
+  const conflict = gpioPinConflict(gpioPin, name);
+  if (conflict) return res.status(409).json({ status: 'error', message: `GPIO-Pin ${gpioPin} ist bereits der Playlist „${conflict}" zugeordnet.` });
+  const playlist = { name, loop_video: loopVideo, videos, gpio_pin: gpioPin };
   playlists.set(name, playlist);
   savePlaylists();
+  applyGpioBindings();
   broadcastState();
   res.status(201).json({ status: 'ok', playlist });
 });
@@ -712,9 +774,21 @@ app.put('/api/playlists/:name', (req, res) => {
   const videos = Array.isArray(req.body?.videos) ? req.body.videos.map(String) : [];
   const invalid = validatePlaylistVideos(loopVideo, videos);
   if (invalid) return res.status(400).json({ status: 'error', message: invalid });
+  let gpioPin = playlist.gpio_pin ?? null;
+  if (req.body?.gpio_pin !== undefined) {
+    try {
+      gpioPin = parseGpioPin(req.body.gpio_pin);
+    } catch (err) {
+      return res.status(400).json({ status: 'error', message: err.message });
+    }
+    const conflict = gpioPinConflict(gpioPin, playlist.name);
+    if (conflict) return res.status(409).json({ status: 'error', message: `GPIO-Pin ${gpioPin} ist bereits der Playlist „${conflict}" zugeordnet.` });
+  }
   playlist.loop_video = loopVideo;
   playlist.videos = videos;
+  playlist.gpio_pin = gpioPin;
   savePlaylists();
+  applyGpioBindings();
   let warning;
   if (activePlaylist === playlist.name) {
     try {
@@ -962,12 +1036,6 @@ app.put('/api/settings', (req, res) => {
       return res.status(400).json({ status: 'error', message: 'Die ausgewählte Playlist wurde nicht gefunden.' });
     }
   }
-  if (typeof body.gpio_pin === 'string' && body.gpio_pin.trim() !== '') {
-    const pin = Number(body.gpio_pin.trim());
-    if (!Number.isInteger(pin) || pin < 0 || pin > 27) {
-      return res.status(400).json({ status: 'error', message: 'GPIO-Pin muss eine BCM-Nummer zwischen 0 und 27 sein.' });
-    }
-  }
   if (body.gpio_debounce_ms !== undefined) {
     const debounce = Number(body.gpio_debounce_ms);
     if (!Number.isFinite(debounce) || debounce < 50 || debounce > 5000) {
@@ -1011,14 +1079,13 @@ app.put('/api/settings', (req, res) => {
   if (typeof body.trigger_start_webhook_url === 'string') settings.setTriggerStartWebhook(body.trigger_start_webhook_url);
   if (typeof body.trigger_end_webhook_url === 'string') settings.setTriggerEndWebhook(body.trigger_end_webhook_url);
   if (typeof body.auto_start_playlist === 'string') settings.setAutoStartPlaylist(body.auto_start_playlist.trim());
-  if (typeof body.gpio_pin === 'string') settings.setGpioPin(body.gpio_pin.trim());
   if (body.gpio_debounce_ms !== undefined) settings.setGpioDebounceMs(Number(body.gpio_debounce_ms));
 
   if (settings.getAudioOutput() !== previousAudio) {
     player.restart();
     warnings.push('Audio-Gerät geändert – der Player wird neu gestartet.');
   }
-  applyGpioSettings();
+  applyGpioBindings(); // ggf. geänderte Entprellung auf alle Playlist-Taster anwenden
 
   broadcastState();
   res.json({ status: 'ok', settings: settings.toJSON(), warnings, gpio: gpio.getStatus() });
@@ -1120,7 +1187,7 @@ app.post('/api/upload', (req, res) => {
 
 // Start ------------------------------------------------------------------------------
 
-applyGpioSettings();
+applyGpioBindings();
 applySystemVolume(); // gespeicherte Lautstärke auf den System-Mixer anwenden
 
 // Steckt ein vorbereiteter USB-Stick, übernimmt er die Wiedergabe. Sonst
