@@ -35,12 +35,6 @@ export class GpioButton extends EventEmitter {
     if (pin !== null) this.#start();
   }
 
-  disable() {
-    this.#teardown();
-    this.#pin = null;
-    this.#error = null;
-  }
-
   stop() {
     this.#stopped = true;
     this.#teardown();

@@ -42,7 +42,9 @@ export class MediaMeta {
 
   #statFor(rel) {
     try {
-      const absolute = path.resolve(this.getVideoDirectory(), rel);
+      const base = path.resolve(this.getVideoDirectory());
+      const absolute = path.resolve(base, rel);
+      if (absolute !== base && !absolute.startsWith(base + path.sep)) return null;
       const stat = fs.statSync(absolute);
       return stat.isFile() ? { absolute, stat } : null;
     } catch {

@@ -24,6 +24,7 @@ import {
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 8080);
 const DATA_DIR = process.env.BEAMPI_DATA_DIR || path.join(__dirname, 'data');
+const TRIGGER_TOKEN = (process.env.BEAMPI_TRIGGER_TOKEN || '').trim();
 const VERSION = readVersion(__dirname);
 
 // Zustand ---------------------------------------------------------------------
@@ -40,6 +41,21 @@ function resolveInVideoDir(relativePath) {
   const absolute = path.resolve(base, relativePath);
   if (absolute !== base && !absolute.startsWith(base + path.sep)) return null;
   return absolute;
+}
+
+function resolveChildInVideoDir(relativePath) {
+  const absolute = resolveInVideoDir(relativePath);
+  if (!absolute) return null;
+  return absolute === settings.getVideoDirectory() ? null : absolute;
+}
+
+function rejectUsbFileMutation(res) {
+  if (!settings.hasUsbOverrides()) return false;
+  res.status(409).json({
+    status: 'error',
+    message: 'Im USB-Stick-Modus sind Dateiänderungen gesperrt.',
+  });
+  return true;
 }
 
 let activePlaylist = null;
@@ -560,6 +576,27 @@ function clearSessionCookie(res) {
   res.setHeader('Set-Cookie', `${SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`);
 }
 
+function triggerTokenFrom(req) {
+  const header = String(req.headers['x-beampi-trigger-token'] ?? '').trim();
+  if (header) return header;
+  const authorization = String(req.headers.authorization ?? '').trim();
+  if (authorization.toLowerCase().startsWith('bearer ')) return authorization.slice(7).trim();
+  return String(req.query?.token ?? req.body?.token ?? '').trim();
+}
+
+function hasTriggerAccess(req) {
+  if (!TRIGGER_TOKEN) return true;
+  if (triggerTokenFrom(req) === TRIGGER_TOKEN) return true;
+  const token = sessionTokenFrom(req);
+  return Boolean(token && auth.validateSession(token));
+}
+
+function requireTriggerAccess(req, res) {
+  if (hasTriggerAccess(req)) return true;
+  res.status(401).json({ status: 'error', message: 'Trigger-Token erforderlich.' });
+  return false;
+}
+
 // Diese Pfade bleiben ohne Anmeldung erreichbar: Login selbst sowie die
 // Maschinen-Endpunkte für Trigger-Hardware (ESPs, Taster-Module, Webhooks).
 function isPublicPath(req) {
@@ -844,11 +881,17 @@ app.all('/api/trigger', (req, res) => {
   if (req.method !== 'GET' && req.method !== 'POST') {
     return res.status(405).json({ status: 'error', message: 'Methode nicht erlaubt' });
   }
+  if (!requireTriggerAccess(req, res)) return;
   const playlistName =
     req.method === 'GET' ? req.query.playlist : req.body?.playlist ?? req.query.playlist;
   if (playlistName) {
-    const started = startPlaylist(String(playlistName));
-    if (!started.ok) return res.status(404).json({ status: 'error', message: 'Playlist nicht gefunden' });
+    const name = String(playlistName);
+    if (activePlaylist !== name) {
+      const started = startPlaylist(name);
+      if (!started.ok) return res.status(404).json({ status: 'error', message: 'Playlist nicht gefunden' });
+    } else if (!playlists.has(name)) {
+      return res.status(404).json({ status: 'error', message: 'Playlist nicht gefunden' });
+    }
   }
   const result = triggerNext();
   if (!result.ok) return res.status(400).json({ status: 'error', message: result.error ?? 'Kein Video verfügbar' });
@@ -857,6 +900,7 @@ app.all('/api/trigger', (req, res) => {
 
 // Eingehender Webhook: Playlist starten und sofort erstes Video triggern
 app.post('/webhook/:name', (req, res) => {
+  if (!requireTriggerAccess(req, res)) return;
   const started = startPlaylist(req.params.name);
   if (!started.ok) return res.status(404).json({ status: 'error', message: 'Playlist nicht gefunden' });
   const result = triggerNext();
@@ -900,6 +944,7 @@ app.get('/api/thumbs/*path', async (req, res) => {
 
 // Videodatei löschen
 app.delete('/api/files', (req, res) => {
+  if (rejectUsbFileMutation(res)) return;
   const relative = String(req.body?.path ?? '').trim();
   if (!relative) return res.status(400).json({ status: 'error', message: 'Kein Dateipfad angegeben.' });
   const absolute = resolveInVideoDir(relative);
@@ -930,6 +975,7 @@ app.delete('/api/files', (req, res) => {
 
 // Videodatei umbenennen/verschieben – Playlist-Verweise ziehen automatisch mit
 app.post('/api/files/rename', (req, res) => {
+  if (rejectUsbFileMutation(res)) return;
   const from = String(req.body?.from ?? '').trim();
   const to = String(req.body?.to ?? '').trim();
   if (!from || !to) return res.status(400).json({ status: 'error', message: 'Quelle und Ziel angeben.' });
@@ -981,9 +1027,10 @@ app.post('/api/files/rename', (req, res) => {
 
 // Leeren Ordner löschen
 app.delete('/api/folders', (req, res) => {
+  if (rejectUsbFileMutation(res)) return;
   const relative = String(req.body?.path ?? '').trim();
   if (!relative) return res.status(400).json({ status: 'error', message: 'Kein Ordner angegeben.' });
-  const absolute = resolveInVideoDir(relative);
+  const absolute = resolveChildInVideoDir(relative);
   if (!absolute) return res.status(400).json({ status: 'error', message: 'Der Pfad muss innerhalb des Videoverzeichnisses liegen.' });
   let entries;
   try {
@@ -1092,6 +1139,7 @@ app.put('/api/settings', (req, res) => {
 });
 
 app.post('/api/folders', (req, res) => {
+  if (rejectUsbFileMutation(res)) return;
   const folderPath = String(req.body?.path ?? '').trim();
   if (!folderPath) return res.status(400).json({ status: 'error', message: 'Bitte einen Ordnernamen angeben.' });
   const base = settings.getVideoDirectory();
@@ -1154,9 +1202,20 @@ const upload = multer({
       const stem = path.basename(sanitized, ext);
       let candidate = sanitized;
       let counter = 2;
-      while (fs.existsSync(path.join(dir, candidate))) {
-        candidate = `${stem} (${counter})${ext}`;
-        counter += 1;
+      while (true) {
+        const target = path.join(dir, candidate);
+        try {
+          const fd = fs.openSync(target, 'wx');
+          fs.closeSync(fd);
+          break;
+        } catch (err) {
+          if (err?.code !== 'EEXIST') {
+            cb(err);
+            return;
+          }
+          candidate = `${stem} (${counter})${ext}`;
+          counter += 1;
+        }
       }
       cb(null, candidate);
     },
@@ -1170,6 +1229,7 @@ const upload = multer({
 });
 
 app.post('/api/upload', (req, res) => {
+  if (rejectUsbFileMutation(res)) return;
   upload.array('video_files')(req, res, (err) => {
     if (err) {
       return res.status(400).json({ status: 'error', message: err.message });

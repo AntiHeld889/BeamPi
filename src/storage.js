@@ -15,9 +15,26 @@ export class Storage {
   }
 
   #readJson(file, fallback) {
+    let raw;
     try {
-      return JSON.parse(fs.readFileSync(file, 'utf8'));
-    } catch {
+      raw = fs.readFileSync(file, 'utf8');
+    } catch (err) {
+      if (err?.code !== 'ENOENT') {
+        console.warn(`JSON-Datei konnte nicht gelesen werden (${file}): ${err.message}`);
+      }
+      return fallback;
+    }
+    try {
+      return JSON.parse(raw);
+    } catch (err) {
+      const backup = `${file}.corrupt-${Date.now()}`;
+      try {
+        fs.renameSync(file, backup);
+        console.warn(`Kaputte JSON-Datei gesichert: ${backup}`);
+      } catch (backupErr) {
+        console.warn(`Kaputte JSON-Datei konnte nicht gesichert werden (${file}): ${backupErr.message}`);
+      }
+      console.warn(`JSON-Datei wird mit Standardwerten ersetzt (${file}): ${err.message}`);
       return fallback;
     }
   }

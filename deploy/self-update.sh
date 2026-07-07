@@ -32,19 +32,19 @@ SRC="$(find "$TMP" -mindepth 1 -maxdepth 1 -type d -name 'BeamPi-*' | head -n1)"
 [ -f "$SRC/server.js" ] && [ -f "$SRC/package.json" ] \
   || { echo "Download unvollständig (server.js/package.json fehlt) – Abbruch."; exit 1; }
 
-# 2) Code übernehmen – Nutzdaten, Abhängigkeiten und Secrets bleiben unangetastet.
+# 2) Abhängigkeiten im neuen Stand vorbereiten. Schlägt das fehl, bleibt die
+#    aktuelle Installation unangetastet.
+cd "$SRC"
+npm install --omit=dev --no-audit --no-fund
+
+# 3) Code übernehmen – Nutzdaten und Secrets bleiben unangetastet.
 #    Gleiche Excludes wie beim regulären rsync-Deploy (deploy.sh).
-rsync -a --delete \
-  --exclude node_modules \
+rsync -a --delete --delay-updates \
   --exclude data \
   --exclude videos \
   --exclude .deploy-pass \
   --exclude .DS_Store \
   "$SRC/" "$DIR/"
-
-# 3) Abhängigkeiten nachziehen (idempotent – tut nichts, wenn alles passt)
-cd "$DIR"
-npm install --omit=dev --no-audit --no-fund
 
 # 4) Neu starten: den laufenden Node-Prozess beenden – systemd (Restart=always)
 #    bringt BeamPi nach RestartSec mit dem neuen Code wieder hoch.

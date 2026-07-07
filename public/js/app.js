@@ -241,6 +241,7 @@
     // Status-Snapshot (häufig während eines Videos) den Regler auf den alten
     // S.volume zurück → er "springt" zurück. Ziehen hebt zudem die Stummschaltung
     // auf – auch das sofort lokal, sonst flackert kurz „Stumm".
+    const wasMuted = S.muted;
     S.volume = Number(value);
     if (S.muted) S.muted = false;
     lastVolumeSentAt = Date.now();
@@ -248,7 +249,7 @@
       try {
         // Ziehen am Regler hebt eine aktive Stummschaltung auf
         const payload = { volume: Number(value) };
-        if (S.muted) payload.muted = false;
+        if (wasMuted) payload.muted = false;
         const result = await api('/api/volume', { method: 'PUT', json: payload });
         if (typeof result?.muted === 'boolean') S.muted = result.muted;
         updateVolumeUI();

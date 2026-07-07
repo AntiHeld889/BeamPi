@@ -89,5 +89,11 @@ export function startSelfUpdate(installDir) {
     { detached: true, stdio: 'ignore' }
   );
   child.on('error', () => { updating = false; });
+  child.on('exit', (code, signal) => {
+    updating = false;
+    if (code && code !== 0) {
+      console.error(`Self-Update wurde beendet (Code ${code}${signal ? `, Signal ${signal}` : ''}).`);
+    }
+  });
   child.unref();
 }
