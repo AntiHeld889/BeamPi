@@ -13,6 +13,9 @@ import { Player, VideoNotFoundError } from './src/player.js';
 import { GpioManager } from './src/gpio-manager.js';
 import { detectUsbShow } from './src/usb.js';
 import { setSystemVolume } from './src/audio.js';
+import { resolveContainedPath } from './src/paths.js';
+import { parseBoolean } from './src/validation.js';
+import { createUploadStorage, sanitizeFilename } from './src/upload-storage.js';
 import {
   readVersion,
   compareVersions,
@@ -37,10 +40,7 @@ const media = new MediaMeta(DATA_DIR, () => settings.getVideoDirectory());
 
 /** Relativen Pfad sicher ins Videoverzeichnis auflösen (oder null). */
 function resolveInVideoDir(relativePath) {
-  const base = settings.getVideoDirectory();
-  const absolute = path.resolve(base, relativePath);
-  if (absolute !== base && !absolute.startsWith(base + path.sep)) return null;
-  return absolute;
+  return resolveContainedPath(settings.getVideoDirectory(), relativePath);
 }
 
 function resolveChildInVideoDir(relativePath) {
@@ -220,7 +220,6 @@ function startPlaylist(name) {
         : `Ungültiger Pfad für Loop-Video: ${err.message}`;
     player.setLoopVideo(null);
   }
-  broadcastState();
   return { ok: true, warning };
 }
 
@@ -372,7 +371,6 @@ function triggerNext() {
     broadcastState(); // der Index hat sich trotzdem bewegt – Clients informieren
     return { ok: false, error: message };
   }
-  broadcastState();
   return { ok: true };
 }
 
@@ -701,16 +699,23 @@ app.get('/api/player/position', async (req, res) => {
 // Lautstärke (0–100) und/oder Stummschaltung – gespeichert und sofort angewendet
 app.put('/api/volume', (req, res) => {
   const body = req.body ?? {};
+  let muted = null;
   if (body.volume !== undefined) {
     const volume = Number(body.volume);
     if (!Number.isFinite(volume) || volume < 0 || volume > 100) {
       return res.status(400).json({ status: 'error', message: 'Lautstärke muss zwischen 0 und 100 liegen.' });
     }
-    settings.setVolume(volume);
   }
   if (body.muted !== undefined) {
-    settings.setMuted(Boolean(body.muted));
+    muted = parseBoolean(body.muted);
+    if (muted === null) {
+      return res.status(400).json({ status: 'error', message: 'Stummschaltung muss true oder false sein.' });
+    }
   }
+  settings.batchUpdate(() => {
+    if (body.volume !== undefined) settings.setVolume(Number(body.volume));
+    if (muted !== null) settings.setMuted(muted);
+  });
   // Regler steuert die komplette System-(ALSA-)Lautstärke, nicht nur mpv.
   applySystemVolume();
   broadcastState();
@@ -723,6 +728,7 @@ app.put('/api/auto-trigger', (req, res) => {
     return res.status(409).json({ status: 'error', message: 'Im USB-Stick-Modus steuert der Stick (beampi.txt) den Auto-Trigger.' });
   }
   const body = req.body ?? {};
+  let enabled = null;
   if (body.interval_s !== undefined) {
     const seconds = Number(body.interval_s);
     if (!Number.isInteger(seconds) || seconds < 1 || seconds > 3660) {
@@ -731,9 +737,17 @@ app.put('/api/auto-trigger', (req, res) => {
         message: 'Intervall muss zwischen 1 Sekunde und 60 Minuten 60 Sekunden liegen.',
       });
     }
-    settings.setAutoTriggerIntervalS(seconds);
   }
-  if (body.enabled !== undefined) settings.setAutoTriggerEnabled(Boolean(body.enabled));
+  if (body.enabled !== undefined) {
+    enabled = parseBoolean(body.enabled);
+    if (enabled === null) {
+      return res.status(400).json({ status: 'error', message: 'Auto-Trigger muss true oder false sein.' });
+    }
+  }
+  settings.batchUpdate(() => {
+    if (body.interval_s !== undefined) settings.setAutoTriggerIntervalS(Number(body.interval_s));
+    if (enabled !== null) settings.setAutoTriggerEnabled(enabled);
+  });
   applyAutoTrigger();
   res.json({ status: 'ok', auto_trigger: autoTriggerSnapshot() });
 });
@@ -1053,7 +1067,9 @@ app.delete('/api/folders', (req, res) => {
 // Videodateien streamen (mit Range-Support für die Browser-Vorschau)
 app.get('/videos/*path', (req, res) => {
   const relative = Array.isArray(req.params.path) ? req.params.path.join('/') : req.params.path;
-  res.sendFile(relative, { root: settings.getVideoDirectory(), dotfiles: 'deny' }, (err) => {
+  const absolute = resolveInVideoDir(relative);
+  if (!absolute) return res.status(400).end();
+  res.sendFile(absolute, { dotfiles: 'deny' }, (err) => {
     if (err && !res.headersSent) res.status(err.status ?? 404).end();
   });
 });
@@ -1090,43 +1106,45 @@ app.put('/api/settings', (req, res) => {
     }
   }
 
-  // --- Anwenden ------------------------------------------------------------
+  // --- Anwenden und gemeinsam genau einmal persistieren -------------------
   const previousAudio = settings.getAudioOutput();
+  let updatedVideoDirectory = null;
 
-  // Im USB-Modus liegt das Videoverzeichnis fest auf dem Stick – ein Schreiben
-  // würde den Player mitten in der laufenden Show vom Stick wegreißen.
-  if (typeof body.video_directory === 'string' && settings.hasUsbOverrides()) {
-    warnings.push('Im USB-Stick-Modus ist das Videoverzeichnis fest vom Stick vorgegeben.');
-  } else if (typeof body.video_directory === 'string') {
-    let updated;
-    try {
-      updated = settings.setVideoDirectory(body.video_directory);
-    } catch (err) {
-      return res.status(400).json({ status: 'error', message: err.message });
-    }
-    if (updated !== player.videoDir) {
-      player.setVideoDirectory(updated);
-      library.invalidate();
-      // Loop-Video der aktiven Playlist im neuen Verzeichnis wiederherstellen
-      if (activePlaylist) {
-        const playlist = playlists.get(activePlaylist);
-        if (playlist) {
-          try {
-            player.setLoopVideo(playlist.loop_video);
-          } catch {
-            warnings.push('Loop-Video wurde im neuen Videoverzeichnis nicht gefunden.');
-            player.setLoopVideo(null);
-          }
+  try {
+    settings.batchUpdate(() => {
+      // Im USB-Modus liegt das Videoverzeichnis fest auf dem Stick – ein Schreiben
+      // würde den Player mitten in der laufenden Show vom Stick wegreißen.
+      if (typeof body.video_directory === 'string' && settings.hasUsbOverrides()) {
+        warnings.push('Im USB-Stick-Modus ist das Videoverzeichnis fest vom Stick vorgegeben.');
+      } else if (typeof body.video_directory === 'string') {
+        updatedVideoDirectory = settings.setVideoDirectory(body.video_directory);
+      }
+      if (typeof body.audio_output === 'string') settings.setAudioOutput(body.audio_output);
+      if (typeof body.trigger_start_webhook_url === 'string') settings.setTriggerStartWebhook(body.trigger_start_webhook_url);
+      if (typeof body.trigger_end_webhook_url === 'string') settings.setTriggerEndWebhook(body.trigger_end_webhook_url);
+      if (typeof body.auto_start_playlist === 'string') settings.setAutoStartPlaylist(body.auto_start_playlist.trim());
+      if (body.gpio_debounce_ms !== undefined) settings.setGpioDebounceMs(Number(body.gpio_debounce_ms));
+    });
+  } catch (err) {
+    return res.status(400).json({ status: 'error', message: err.message });
+  }
+
+  if (updatedVideoDirectory && updatedVideoDirectory !== player.videoDir) {
+    player.setVideoDirectory(updatedVideoDirectory);
+    library.invalidate();
+    // Loop-Video der aktiven Playlist im neuen Verzeichnis wiederherstellen
+    if (activePlaylist) {
+      const playlist = playlists.get(activePlaylist);
+      if (playlist) {
+        try {
+          player.setLoopVideo(playlist.loop_video);
+        } catch {
+          warnings.push('Loop-Video wurde im neuen Videoverzeichnis nicht gefunden.');
+          player.setLoopVideo(null);
         }
       }
     }
   }
-
-  if (typeof body.audio_output === 'string') settings.setAudioOutput(body.audio_output);
-  if (typeof body.trigger_start_webhook_url === 'string') settings.setTriggerStartWebhook(body.trigger_start_webhook_url);
-  if (typeof body.trigger_end_webhook_url === 'string') settings.setTriggerEndWebhook(body.trigger_end_webhook_url);
-  if (typeof body.auto_start_playlist === 'string') settings.setAutoStartPlaylist(body.auto_start_playlist.trim());
-  if (body.gpio_debounce_ms !== undefined) settings.setGpioDebounceMs(Number(body.gpio_debounce_ms));
 
   if (settings.getAudioOutput() !== previousAudio) {
     player.restart();
@@ -1142,9 +1160,8 @@ app.post('/api/folders', (req, res) => {
   if (rejectUsbFileMutation(res)) return;
   const folderPath = String(req.body?.path ?? '').trim();
   if (!folderPath) return res.status(400).json({ status: 'error', message: 'Bitte einen Ordnernamen angeben.' });
-  const base = settings.getVideoDirectory();
-  const target = path.resolve(base, folderPath);
-  if (target !== base && !target.startsWith(base + path.sep)) {
+  const target = resolveInVideoDir(folderPath);
+  if (!target) {
     return res.status(400).json({ status: 'error', message: 'Der Ordnerpfad muss innerhalb des Videoverzeichnisses liegen.' });
   }
   try {
@@ -1158,68 +1175,8 @@ app.post('/api/folders', (req, res) => {
 
 // Upload ---------------------------------------------------------------------------
 
-function sanitizeFilename(original) {
-  // multer liefert Dateinamen als latin1 – nach UTF-8 zurückwandeln (Umlaute!)
-  let name = original;
-  try {
-    const decoded = Buffer.from(original, 'latin1').toString('utf8');
-    if (!decoded.includes('�')) name = decoded;
-  } catch {
-    /* Original behalten */
-  }
-  name = path.basename(name).replace(/[\\/:*?"<>|\x00-\x1f]/g, '_').trim();
-  if (name.startsWith('.')) name = `_${name.slice(1)}`;
-  return name;
-}
-
 const upload = multer({
-  storage: multer.diskStorage({
-    destination: (req, file, cb) => {
-      try {
-        const base = settings.getVideoDirectory();
-        // Query-Parameter funktioniert unabhängig von der Feld-Reihenfolge im
-        // Multipart-Stream (req.body ist nur gefüllt, wenn das Feld vor den
-        // Dateien kommt – externe Clients machen das nicht immer richtig).
-        const sub = String(req.query?.subdirectory ?? req.body?.subdirectory ?? '').trim();
-        const target = sub ? path.resolve(base, sub) : base;
-        if (target !== base && !target.startsWith(base + path.sep)) {
-          cb(new Error('Der Zielordner muss innerhalb des Videoverzeichnisses liegen.'));
-          return;
-        }
-        fs.mkdirSync(target, { recursive: true });
-        req.beampiUploadDir = target;
-        cb(null, target);
-      } catch (err) {
-        cb(err);
-      }
-    },
-    filename: (req, file, cb) => {
-      // Vorhandene Dateien nicht überschreiben (könnte gerade abgespielt
-      // werden) – stattdessen "name (2).mp4" usw.
-      const sanitized = sanitizeFilename(file.originalname);
-      const dir = req.beampiUploadDir ?? settings.getVideoDirectory();
-      const ext = path.extname(sanitized);
-      const stem = path.basename(sanitized, ext);
-      let candidate = sanitized;
-      let counter = 2;
-      while (true) {
-        const target = path.join(dir, candidate);
-        try {
-          const fd = fs.openSync(target, 'wx');
-          fs.closeSync(fd);
-          break;
-        } catch (err) {
-          if (err?.code !== 'EEXIST') {
-            cb(err);
-            return;
-          }
-          candidate = `${stem} (${counter})${ext}`;
-          counter += 1;
-        }
-      }
-      cb(null, candidate);
-    },
-  }),
+  storage: createUploadStorage(() => settings.getVideoDirectory()),
   // Ungültige Dateien überspringen statt den ganzen Upload abzubrechen
   fileFilter: (req, file, cb) => {
     const name = sanitizeFilename(file.originalname);

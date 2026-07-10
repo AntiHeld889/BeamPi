@@ -6,6 +6,7 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
+    "test": "node --test",
     "set-password": "node tools/reset-password.mjs",
     "reset-password": "node tools/reset-password.mjs --default"
   },

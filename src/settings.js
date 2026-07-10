@@ -29,6 +29,8 @@ export class SettingsManager {
   // gespeicherten Werten, werden aber NICHT auf die Platte geschrieben –
   // Stick abziehen + Neustart stellt den Normalbetrieb wieder her.
   #overrides = {};
+  #batching = false;
+  #dirty = false;
 
   constructor(storage) {
     this.storage = storage;
@@ -61,7 +63,31 @@ export class SettingsManager {
   }
 
   save() {
+    if (this.#batching) {
+      this.#dirty = true;
+      return;
+    }
     this.storage.saveSettings(this.settings);
+  }
+
+  /** Mehrere Setter als einen atomaren JSON-Schreibvorgang persistieren. */
+  batchUpdate(callback) {
+    if (this.#batching) return callback();
+    const previous = { ...this.settings };
+    this.#batching = true;
+    this.#dirty = false;
+    try {
+      const result = callback();
+      this.#batching = false;
+      if (this.#dirty) this.storage.saveSettings(this.settings);
+      this.#dirty = false;
+      return result;
+    } catch (err) {
+      this.settings = previous;
+      this.#batching = false;
+      this.#dirty = false;
+      throw err;
+    }
   }
 
   toJSON() {

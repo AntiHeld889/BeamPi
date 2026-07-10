@@ -13,14 +13,11 @@ export const SESSION_MAX_AGE_S = 180 * 24 * 60 * 60; // 180 Tage – "Anmeldung 
 export class Auth {
   #file;
   #state;
+  #fileSignature = null;
 
   constructor(dataDir) {
     this.#file = path.join(dataDir, 'auth.json');
-    try {
-      this.#state = JSON.parse(fs.readFileSync(this.#file, 'utf8'));
-    } catch {
-      this.#state = null;
-    }
+    this.#state = this.#readState();
     if (!this.#state?.password_hash) {
       const salt = crypto.randomBytes(16).toString('hex');
       this.#state = {
@@ -32,7 +29,47 @@ export class Auth {
       };
       this.#save();
     }
-    this.#state.sessions ??= {};
+    this.#normalizeState();
+  }
+
+  #readState() {
+    try {
+      const state = JSON.parse(fs.readFileSync(this.#file, 'utf8'));
+      const stat = fs.statSync(this.#file);
+      this.#fileSignature = `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}`;
+      return state;
+    } catch {
+      return null;
+    }
+  }
+
+  #normalizeState() {
+    if (!this.#state.sessions || typeof this.#state.sessions !== 'object' || Array.isArray(this.#state.sessions)) {
+      this.#state.sessions = {};
+    }
+  }
+
+  /** Übernimmt Passwort-/Session-Änderungen eines parallel laufenden CLI-Tools. */
+  #reloadIfChanged() {
+    let signature;
+    try {
+      const stat = fs.statSync(this.#file);
+      signature = `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}`;
+    } catch {
+      // Eine atomar ersetzte Datei kann für einen sehr kurzen Moment fehlen.
+      // Dann den gültigen In-Memory-Zustand behalten und später erneut prüfen.
+      return;
+    }
+    if (signature === this.#fileSignature) return;
+    try {
+      const state = JSON.parse(fs.readFileSync(this.#file, 'utf8'));
+      if (!state?.password_hash || typeof state.salt !== 'string') return;
+      this.#state = state;
+      this.#fileSignature = signature;
+      this.#normalizeState();
+    } catch {
+      // Eine unvollständige/externe Datei nie über den gültigen Zustand legen.
+    }
   }
 
   #hash(password, salt) {
@@ -43,17 +80,22 @@ export class Auth {
     const tmp = `${this.#file}.tmp`;
     fs.writeFileSync(tmp, JSON.stringify(this.#state, null, 2), { mode: 0o600 });
     fs.renameSync(tmp, this.#file);
+    const stat = fs.statSync(this.#file);
+    this.#fileSignature = `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}`;
   }
 
   get username() {
+    this.#reloadIfChanged();
     return this.#state.username;
   }
 
   get mustChangePassword() {
+    this.#reloadIfChanged();
     return Boolean(this.#state.must_change_password);
   }
 
   verifyCredentials(username, password) {
+    this.#reloadIfChanged();
     if (typeof username !== 'string' || typeof password !== 'string') return false;
     const expected = Buffer.from(this.#state.password_hash, 'hex');
     const actual = Buffer.from(this.#hash(password, this.#state.salt), 'hex');
@@ -64,6 +106,7 @@ export class Auth {
 
   /** Setzt ein neues Passwort und beendet alle anderen Sessions. */
   setPassword(newPassword, keepSessionToken = null) {
+    this.#reloadIfChanged();
     const salt = crypto.randomBytes(16).toString('hex');
     this.#state.salt = salt;
     this.#state.password_hash = this.#hash(newPassword, salt);
@@ -75,6 +118,7 @@ export class Auth {
   }
 
   createSession() {
+    this.#reloadIfChanged();
     const token = crypto.randomBytes(32).toString('hex');
     this.#state.sessions[token] = { created: Date.now() };
     // Alte Sessions begrenzen (älteste zuerst entfernen)
@@ -88,6 +132,7 @@ export class Auth {
   }
 
   validateSession(token) {
+    this.#reloadIfChanged();
     if (!token) return false;
     const session = this.#state.sessions[token];
     if (!session) return false;
@@ -100,6 +145,7 @@ export class Auth {
   }
 
   destroySession(token) {
+    this.#reloadIfChanged();
     if (token && this.#state.sessions[token]) {
       delete this.#state.sessions[token];
       this.#save();

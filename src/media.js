@@ -2,6 +2,9 @@ import { execFile } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { resolveContainedPath } from './paths.js';
+
+const CACHE_VERSION = 2;
 
 /**
  * Videodauern (ffprobe) und Thumbnails (ffmpeg) mit Cache auf der Platte.
@@ -11,7 +14,7 @@ import path from 'node:path';
 export class MediaMeta {
   #cacheFile;
   #thumbDir;
-  #cache = new Map(); // rel -> { size, mtimeMs, duration }
+  #cache = new Map(); // root + rel -> { size, mtimeMs, duration }
   #queue = [];
   #queued = new Set();
   #probing = false;
@@ -27,26 +30,32 @@ export class MediaMeta {
     fs.mkdirSync(this.#thumbDir, { recursive: true });
     try {
       const stored = JSON.parse(fs.readFileSync(this.#cacheFile, 'utf8'));
-      for (const [rel, entry] of Object.entries(stored)) this.#cache.set(rel, entry);
+      if (stored?.version === CACHE_VERSION && stored.entries) {
+        for (const [key, entry] of Object.entries(stored.entries)) this.#cache.set(key, entry);
+      }
     } catch {
       /* kein Cache vorhanden */
     }
   }
 
-  #key(rel, stat) {
+  #entryKey(base, rel) {
+    return `${path.resolve(base)}\n${rel}`;
+  }
+
+  #thumbKey(base, rel, stat) {
     return crypto
       .createHash('sha1')
-      .update(`${rel}:${stat.size}:${Math.round(stat.mtimeMs)}`)
+      .update(`${path.resolve(base)}:${rel}:${stat.size}:${Math.round(stat.mtimeMs)}`)
       .digest('hex');
   }
 
-  #statFor(rel) {
+  #statFor(rel, baseDir = this.getVideoDirectory()) {
     try {
-      const base = path.resolve(this.getVideoDirectory());
-      const absolute = path.resolve(base, rel);
-      if (absolute !== base && !absolute.startsWith(base + path.sep)) return null;
+      const base = path.resolve(baseDir);
+      const absolute = resolveContainedPath(base, rel, { allowBase: false });
+      if (!absolute) return null;
       const stat = fs.statSync(absolute);
-      return stat.isFile() ? { absolute, stat } : null;
+      return stat.isFile() ? { absolute, base, stat } : null;
     } catch {
       return null;
     }
@@ -54,7 +63,8 @@ export class MediaMeta {
 
   /** Gecachte Dauer in Sekunden oder null. */
   durationFor(rel, size, mtimeMs) {
-    const entry = this.#cache.get(rel);
+    const base = path.resolve(this.getVideoDirectory());
+    const entry = this.#cache.get(this.#entryKey(base, rel));
     if (!entry) return null;
     if (entry.size !== size || Math.round(entry.mtimeMs) !== Math.round(mtimeMs)) return null;
     return entry.duration ?? null;
@@ -62,11 +72,15 @@ export class MediaMeta {
 
   /** Fehlende Dauern im Hintergrund nachziehen. */
   ensureDurations(files) {
+    const base = path.resolve(this.getVideoDirectory());
     for (const file of files) {
-      if (this.durationFor(file.path, file.size, file.mtimeMs) !== null) continue;
-      if (this.#queued.has(file.path)) continue;
-      this.#queued.add(file.path);
-      this.#queue.push(file.path);
+      const key = this.#entryKey(base, file.path);
+      const entry = this.#cache.get(key);
+      const alreadyProbed =
+        entry && entry.size === file.size && Math.round(entry.mtimeMs) === Math.round(file.mtimeMs);
+      if (alreadyProbed || this.#queued.has(key)) continue;
+      this.#queued.add(key);
+      this.#queue.push({ rel: file.path, base, key });
     }
     this.#pumpProbe();
   }
@@ -76,16 +90,19 @@ export class MediaMeta {
     this.#probing = true;
     try {
       while (this.#queue.length > 0) {
-        const rel = this.#queue.shift();
-        this.#queued.delete(rel);
-        const found = this.#statFor(rel);
-        if (!found) continue;
+        const { rel, base, key } = this.#queue.shift();
+        const found = this.#statFor(rel, base);
+        if (!found) {
+          this.#queued.delete(key);
+          continue;
+        }
         const duration = await this.#probeDuration(found.absolute);
-        this.#cache.set(rel, {
+        this.#cache.set(key, {
           size: found.stat.size,
           mtimeMs: found.stat.mtimeMs,
           duration,
         });
+        this.#queued.delete(key);
         this.#scheduleSave();
       }
     } finally {
@@ -115,7 +132,10 @@ export class MediaMeta {
     clearTimeout(this.#saveTimer);
     this.#saveTimer = setTimeout(() => {
       try {
-        fs.writeFileSync(this.#cacheFile, JSON.stringify(Object.fromEntries(this.#cache)));
+        fs.writeFileSync(this.#cacheFile, JSON.stringify({
+          version: CACHE_VERSION,
+          entries: Object.fromEntries(this.#cache),
+        }));
       } catch {
         /* Cache ist verzichtbar */
       }
@@ -129,7 +149,7 @@ export class MediaMeta {
   async thumbnail(rel) {
     const found = this.#statFor(rel);
     if (!found) return null;
-    const key = this.#key(rel, found.stat);
+    const key = this.#thumbKey(found.base, rel, found.stat);
     const file = path.join(this.#thumbDir, `${key}.jpg`);
     if (fs.existsSync(file)) return file;
     const failedAt = this.#failedThumbs.get(key);
@@ -156,7 +176,14 @@ export class MediaMeta {
           ['-y', '-loglevel', 'error', '-ss', seek, '-i', absolute,
             '-frames:v', '1', '-vf', 'scale=240:-2', '-q:v', '5', outFile],
           { timeout: 20000 },
-          (err) => resolve(!err && fs.existsSync(outFile) && fs.statSync(outFile).size > 0)
+          (err) => {
+            if (err) return resolve(false);
+            try {
+              resolve(fs.statSync(outFile).size > 0);
+            } catch {
+              resolve(false);
+            }
+          }
         );
       });
       if (ok) return true;

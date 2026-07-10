@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
+import { resolveContainedPath } from './paths.js';
 
 const SOCKET_PATH = path.join(os.tmpdir(), 'beampi-mpv.sock');
 const CONNECT_TIMEOUT_MS = 6000;
@@ -78,6 +79,7 @@ export class Player extends EventEmitter {
     const absolute = this.#resolveVideo(relativePath);
     this.#queue.push(absolute);
     this.#pump();
+    this.#emitStatus();
   }
 
   /** mpv neu starten (z. B. nach Wechsel des Audio-Geräts). */
@@ -143,9 +145,8 @@ export class Player extends EventEmitter {
   // Pfad-Handling ------------------------------------------------------------
 
   #resolveVideo(relativePath) {
-    const base = path.resolve(this.videoDir);
-    const absolute = path.resolve(base, relativePath);
-    if (absolute !== base && !absolute.startsWith(base + path.sep)) {
+    const absolute = resolveContainedPath(this.videoDir, relativePath, { allowBase: false });
+    if (!absolute) {
       throw new InvalidVideoPathError('Der Videopfad muss innerhalb des Videoverzeichnisses liegen.');
     }
     let stat;
@@ -179,7 +180,6 @@ export class Player extends EventEmitter {
       this.#currentIsLoop = false;
       this.#loadFile(next, false);
       this.#sendWebhook('start', next);
-      this.#emitStatus();
     } else {
       this.#syncPlayback();
     }
@@ -196,14 +196,12 @@ export class Player extends EventEmitter {
       if (this.#currentVideo) this.#command(['stop']);
       this.#currentVideo = null;
       this.#currentIsLoop = false;
-      this.#emitStatus();
       return;
     }
     if (this.#currentIsLoop && this.#currentVideo === this.#loopVideo) return;
     this.#currentVideo = this.#loopVideo;
     this.#currentIsLoop = true;
     this.#loadFile(this.#loopVideo, true);
-    this.#emitStatus();
   }
 
   #loadFile(absolute, loop) {
@@ -306,24 +304,27 @@ export class Player extends EventEmitter {
 
     // Auf den IPC-Socket warten und verbinden.
     const deadline = Date.now() + CONNECT_TIMEOUT_MS;
+    let connectingSock = null;
     clearInterval(this.#connectTimer);
     this.#connectTimer = setInterval(() => {
       if (this.#stopped || this.#proc !== proc || proc.exitCode !== null) {
         clearInterval(this.#connectTimer);
+        connectingSock?.destroy();
         this.#starting = false;
         return;
       }
       if (Date.now() > deadline) {
         clearInterval(this.#connectTimer);
+        connectingSock?.destroy();
         this.#starting = false;
         console.error('mpv-IPC-Verbindung fehlgeschlagen.');
         proc.kill('SIGTERM');
         return;
       }
-      if (!fs.existsSync(SOCKET_PATH)) return;
+      if (!fs.existsSync(SOCKET_PATH) || connectingSock) return;
 
-      clearInterval(this.#connectTimer);
       const sock = net.createConnection(SOCKET_PATH);
+      connectingSock = sock;
       sock.setEncoding('utf8');
       sock.on('connect', () => {
         if (this.#proc !== proc || this.#stopped) {
@@ -331,6 +332,8 @@ export class Player extends EventEmitter {
           sock.destroy();
           return;
         }
+        clearInterval(this.#connectTimer);
+        connectingSock = null;
         this.#sock = sock;
         this.#buffer = '';
         this.#connected = true;
@@ -341,7 +344,13 @@ export class Player extends EventEmitter {
       sock.on('data', (chunk) => this.#onData(chunk));
       sock.on('error', () => {});
       sock.on('close', () => {
-        if (this.#sock === sock) this.#handleMpvGone();
+        if (this.#sock === sock) {
+          this.#handleMpvGone();
+        } else if (connectingSock === sock) {
+          // Socket-Datei war schon sichtbar, aber mpv noch nicht annahmebereit.
+          // Der laufende Intervall-Timer versucht die Verbindung erneut.
+          connectingSock = null;
+        }
       });
     }, 100);
   }
@@ -473,6 +482,7 @@ export class Player extends EventEmitter {
       timestamp: Date.now() / 1000,
     };
 
+    let postError = null;
     try {
       const response = await fetch(url, {
         method: 'POST',
@@ -480,12 +490,14 @@ export class Player extends EventEmitter {
         body: JSON.stringify(payload),
         signal: AbortSignal.timeout(5000),
       });
-      if (response.status === 405 || response.status === 501) {
-        await this.#sendWebhookGet(url, payload);
-      }
+      await response.body?.cancel();
+      if (response.ok) return;
+      postError = new Error(`HTTP ${response.status}`);
     } catch (err) {
-      console.warn(`Webhook ${url} fehlgeschlagen: ${err.message}`);
+      postError = err;
     }
+    console.warn(`Webhook (POST) ${url} fehlgeschlagen: ${postError.message} – versuche GET.`);
+    await this.#sendWebhookGet(url, payload);
   }
 
   async #sendWebhookGet(url, payload) {
@@ -494,7 +506,9 @@ export class Player extends EventEmitter {
       for (const [key, value] of Object.entries(payload)) {
         target.searchParams.append(key, String(value));
       }
-      await fetch(target, { signal: AbortSignal.timeout(5000) });
+      const response = await fetch(target, { signal: AbortSignal.timeout(5000) });
+      await response.body?.cancel();
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
     } catch (err) {
       console.warn(`Webhook (GET) ${url} fehlgeschlagen: ${err.message}`);
     }
